@@ -8,7 +8,7 @@ import (
 	"github.com/rudolfkova/grpc_auth/pkg/gamekit"
 )
 
-// World — последний снимок из gamekit.TypeState.
+// World — последний снимок из gamekit.TypeState (игроки: id, x, y, hp, face_dx, face_dy).
 type World struct {
 	Players map[int64]gamekit.Player
 	Tiles   []gamekit.Tile

@@ -19,6 +19,7 @@ import (
 
 	"client/internal/gamews"
 	"client/internal/lobby"
+	"client/internal/playeranim"
 	"client/internal/state"
 	"client/internal/tiles"
 	"client/internal/ui"
@@ -305,6 +306,20 @@ func (g *Game) Draw(screen *ebiten.Image) {
 
 		vector.DrawFilledCircle(screen, cx, cy, world.PlayerRadius, fill, true)
 		vector.StrokeCircle(screen, cx, cy, world.PlayerRadius, 1.5, color.RGBA{0xff, 0xff, 0xff, 0x90}, true)
+
+		if pl.FaceDX != 0 || pl.FaceDY != 0 {
+			const mark = float32(22)
+			tipX := cx + float32(pl.FaceDX)*mark
+			tipY := cy + float32(pl.FaceDY)*mark
+			card := playeranim.CardinalFromPlayer(pl)
+			arrow := [...]color.RGBA{
+				{0xff, 0xc8, 0x78, 0xee}, // E
+				{0x88, 0xd8, 0xff, 0xee}, // S
+				{0xc8, 0xa8, 0xff, 0xee}, // W
+				{0x98, 0xf0, 0xa8, 0xee}, // N
+			}
+			vector.StrokeLine(screen, cx, cy, tipX, tipY, 2.5, arrow[card], true)
+		}
 
 		tagY := float64(cy) - float64(world.PlayerRadius) - world.LabelAboveGap
 		idLabel := fmt.Sprintf("%d", id)
