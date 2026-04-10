@@ -7,6 +7,7 @@ import (
 	"math"
 	"slices"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/gorilla/websocket"
@@ -34,7 +35,15 @@ const (
 	playerVisLambda = 14.0
 	// при скачке цели дальше этого (в клетках) — мгновенный snap, без длинного догона
 	playerVisSnapTilesSq = 2.25 // 1.5²
+
+	chatBubbleDur   = 5 * time.Second
+	chatBubbleRunes = 40
 )
+
+type chatBubble struct {
+	text  string
+	until time.Time
+}
 
 type Game struct {
 	jwt     string
@@ -58,6 +67,8 @@ type Game struct {
 	lobbyFocused  bool
 	lobbyChatSize float64
 	lobbyChatID   int64
+
+	chatBubbles map[int64]chatBubble // sender_id == id игрока в игре
 }
 
 func NewGame(accessToken, refreshToken string, userID int64, lobbyChatID int64, wsChat *websocket.Conn, wsGame *websocket.Conn, wsMsgs <-chan gamekit.Envelope, wsLobbyPush <-chan lobby.SubscribeMessage, lobbyLines []lobby.Line) *Game {
@@ -78,6 +89,7 @@ func NewGame(accessToken, refreshToken string, userID int64, lobbyChatID int64, 
 		lobbyLines:    lobbyLines,
 		lobbyChatSize: 13,
 		lobbyChatID:   lobbyChatID,
+		chatBubbles:   make(map[int64]chatBubble),
 	}
 }
 
@@ -100,6 +112,11 @@ func (g *Game) Update() error {
 			if len(g.lobbyLines) > lobby.MaxChatLines {
 				g.lobbyLines = g.lobbyLines[len(g.lobbyLines)-lobby.MaxChatLines:]
 			}
+			bt := strings.TrimSpace(strings.ReplaceAll(push.Text, "\n", " "))
+			if utf8.RuneCountInString(bt) > chatBubbleRunes {
+				bt = string([]rune(bt)[:chatBubbleRunes]) + "…"
+			}
+			g.chatBubbles[push.SenderID] = chatBubble{text: bt, until: time.Now().Add(chatBubbleDur)}
 		default:
 			if inpututil.IsKeyJustPressed(ebiten.KeyTab) {
 				g.lobbyFocused = !g.lobbyFocused
@@ -144,6 +161,7 @@ func (g *Game) Update() error {
 				}
 			}
 			g.tickPlayerVis()
+			g.pruneChatBubbles()
 			g.tickCamera()
 			return nil
 		}
@@ -201,6 +219,15 @@ func (g *Game) tickCamera() {
 }
 
 func (g *Game) viewCam() (camX, camY float32) { return g.camX, g.camY }
+
+func (g *Game) pruneChatBubbles() {
+	now := time.Now()
+	for id, b := range g.chatBubbles {
+		if now.After(b.until) {
+			delete(g.chatBubbles, id)
+		}
+	}
+}
 
 func (g *Game) tickPlayerVis() {
 	dt := 1.0 / 60.0
@@ -263,6 +290,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		Source: ui.FontSource(),
 		Size:   world.LabelTextSize,
 	}
+	bubbleFace := &textv2.GoTextFace{Source: ui.FontSource(), Size: 12}
 
 	for _, id := range ids {
 		pl := g.World.Players[id]
@@ -278,13 +306,35 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		vector.DrawFilledCircle(screen, cx, cy, world.PlayerRadius, fill, true)
 		vector.StrokeCircle(screen, cx, cy, world.PlayerRadius, 1.5, color.RGBA{0xff, 0xff, 0xff, 0x90}, true)
 
-		label := fmt.Sprintf("%d", pl.HP)
+		tagY := float64(cy) - float64(world.PlayerRadius) - world.LabelAboveGap
+		idLabel := fmt.Sprintf("%d", id)
+		_, idH := textv2.Measure(idLabel, face, 0)
+		if b, ok := g.chatBubbles[id]; ok && b.text != "" {
+			const bubblePad = 6.0
+			const bubbleGap = 6.0 // зазор между низом пузыря и верхом строки ID
+			tw, th := textv2.Measure(b.text, bubbleFace, 0)
+			bw := float32(tw) + float32(2*bubblePad)
+			bh := float32(th) + float32(2*bubblePad)
+			// tagY — низ подписи ID; пузырь целиком выше блока ID
+			bubbleBottom := float32(tagY) - float32(idH+bubbleGap)
+			bubbleTop := bubbleBottom - bh
+			bx := cx - bw*0.5
+			vector.DrawFilledRect(screen, bx, bubbleTop, bw, bh, color.RGBA{0x22, 0x24, 0x32, 0xea}, false)
+			vector.StrokeRect(screen, bx, bubbleTop, bw, bh, 1.5, color.RGBA{0x6e, 0x82, 0xa8, 0xff}, false)
+			bo := &textv2.DrawOptions{}
+			bo.PrimaryAlign = textv2.AlignCenter
+			bo.SecondaryAlign = textv2.AlignCenter
+			bo.GeoM.Translate(float64(cx), float64(bubbleTop)+float64(bh)*0.5)
+			bo.ColorScale.ScaleWithColor(color.RGBA{0xee, 0xf0, 0xf8, 0xff})
+			textv2.Draw(screen, b.text, bubbleFace, bo)
+		}
+
 		opts := &textv2.DrawOptions{}
 		opts.PrimaryAlign = textv2.AlignCenter
 		opts.SecondaryAlign = textv2.AlignEnd
-		opts.GeoM.Translate(float64(cx), float64(cy)-world.PlayerRadius-world.LabelAboveGap)
+		opts.GeoM.Translate(float64(cx), tagY)
 		opts.ColorScale.ScaleWithColor(color.RGBA{0xff, 0xff, 0xff, 0xff})
-		textv2.Draw(screen, label, face, opts)
+		textv2.Draw(screen, idLabel, face, opts)
 	}
 	g.drawLobbyChat(screen)
 }
