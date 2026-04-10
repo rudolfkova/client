@@ -39,9 +39,10 @@ type App struct {
 	blocks   bool
 
 	pickTilesets  bool // true: тайлсеты из assets/tileSets, false: корневые PNG в assets/
-	singleIdx     int
-	paletteScroll int
-	winW, winH    int
+	singleIdx       int
+	paletteScroll   int // вертикаль сетки палитры
+	paletteScrollX  int // горизонталь (если сетка шире панели)
+	winW, winH      int
 
 	editLayer    int // слой spawn_tile / clear_tile
 	editRotation int // четверти по часовой, 0..3
@@ -170,8 +171,8 @@ func (a *App) Update() error {
 			a.World.ApplyEnvelope(msg)
 		default:
 			mx, my := ebiten.CursorPosition()
-			_, wy := ebiten.Wheel()
-			a.handlePaletteScroll(mx, my, wy)
+			wx, wy := ebiten.Wheel()
+			a.handlePaletteScroll(mx, my, wx, wy)
 
 			if inpututil.IsKeyJustPressed(ebiten.KeyComma) {
 				a.decLayer()
@@ -201,11 +202,11 @@ func (a *App) Update() error {
 				}
 				if inpututil.IsKeyJustPressed(ebiten.KeyArrowUp) {
 					a.nextSet(-1)
-					a.paletteScroll = 0
+					a.paletteScroll, a.paletteScrollX = 0, 0
 				}
 				if inpututil.IsKeyJustPressed(ebiten.KeyArrowDown) {
 					a.nextSet(1)
-					a.paletteScroll = 0
+					a.paletteScroll, a.paletteScrollX = 0, 0
 				}
 			} else {
 				keys := tiles.EditorSingleTextureKeys()
@@ -291,7 +292,7 @@ func (a *App) Draw(screen *ebiten.Image) {
 
 	a.drawPalette(screen)
 
-	line1 := "ЛКМ — тайл · ПКМ — очистить слой в клетке · , . — слой · R — поворот · Пробел — коллизия"
+	line1 := "ЛКМ — тайл · ПКМ — очистить слой · , . — слой · R — поворот · Колёсико на сетке: вниз/вверх и влево/вправо (широкий лист)"
 	hudFace := &textv2.GoTextFace{Source: ui.FontSource(), Size: 14}
 	hudOpts := &textv2.DrawOptions{}
 	hudOpts.ColorScale.ScaleWithColor(color.RGBA{0xf0, 0xf0, 0xf0, 0xff})

@@ -19,9 +19,10 @@ import (
 const Cell = 16
 
 var (
-	setMu          sync.Mutex
-	setTileCount   = make(map[string]int)            // base -> число тайлов после успешной нарезки
-	setLoadFailed  = make(map[string]struct{})      // base -> попытка загрузки уже провалилась
+	setMu         sync.Mutex
+	setTileCount  = make(map[string]int)         // base -> число тайлов после успешной нарезки
+	setSheetCols  = make(map[string]int)         // base -> колонок на листе (как в PNG)
+	setLoadFailed = make(map[string]struct{})   // base -> попытка загрузки уже провалилась
 )
 
 // ParseIndexedTexture парсит имя вида Beach_Tile_12 (база совпадает с именем PNG без расширения).
@@ -58,6 +59,13 @@ func TileCountInSet(setBase string) int {
 	setMu.Lock()
 	defer setMu.Unlock()
 	return setTileCount[setBase]
+}
+
+// TilesetSheetCols сколько колонок на PNG тайлсета (слева направо как в файле). 0 если набор не загружен.
+func TilesetSheetCols(setBase string) int {
+	setMu.Lock()
+	defer setMu.Unlock()
+	return setSheetCols[setBase]
 }
 
 // ensureTilesetLoaded подгружает assets/tileSets/<base>.png и нарезает клетки (для игрового клиента и новых имён с сервера).
@@ -114,6 +122,7 @@ func registerTilesetPNG(embedPath, baseName string) (int, error) {
 	n := idx - 1
 	setMu.Lock()
 	setTileCount[baseName] = n
+	setSheetCols[baseName] = cols
 	setMu.Unlock()
 	return n, nil
 }

@@ -163,7 +163,10 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		if a.Y != b.Y {
 			return a.Y - b.Y
 		}
-		return a.X - b.X
+		if a.X != b.X {
+			return a.X - b.X
+		}
+		return a.Layer - b.Layer
 	})
 	// Текстуры из state.Texture: Base_N из assets/tileSets и одиночные ключи = имя PNG в корне assets/.
 	for _, t := range tileList {

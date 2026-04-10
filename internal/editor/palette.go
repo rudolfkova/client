@@ -64,13 +64,43 @@ func (a *App) gridCols() int {
 	return c
 }
 
+// tilesetPaletteCols колонок в сетке = как на PNG листа; иначе запасной вариант по ширине панели.
+func (a *App) tilesetPaletteCols() int {
+	c := tiles.TilesetSheetCols(a.currentSet())
+	if c > 0 {
+		return c
+	}
+	return a.gridCols()
+}
+
+func (a *App) gridInnerW() int {
+	return paletteW - 2*pad
+}
+
+func (a *App) maxPaletteScrollX() int {
+	if !a.pickTilesets {
+		return 0
+	}
+	cols := a.tilesetPaletteCols()
+	if cols <= 0 {
+		return 0
+	}
+	step := a.thumbStep()
+	contentW := cols*step - thumbGap
+	inner := a.gridInnerW()
+	if contentW <= inner {
+		return 0
+	}
+	return contentW - inner
+}
+
 func (a *App) maxPaletteScroll() int {
 	if a.pickTilesets {
 		n := a.tileCount()
 		if n <= 0 {
 			return 0
 		}
-		cols := a.gridCols()
+		cols := a.tilesetPaletteCols()
 		rows := (n + cols - 1) / cols
 		h := rows*a.thumbStep() - thumbGap
 		avail := a.gridBottom() - paletteGridTop()
@@ -89,12 +119,19 @@ func (a *App) maxPaletteScroll() int {
 }
 
 func (a *App) clampScroll() {
-	m := a.maxPaletteScroll()
+	my := a.maxPaletteScroll()
 	if a.paletteScroll < 0 {
 		a.paletteScroll = 0
 	}
-	if a.paletteScroll > m {
-		a.paletteScroll = m
+	if a.paletteScroll > my {
+		a.paletteScroll = my
+	}
+	mx := a.maxPaletteScrollX()
+	if a.paletteScrollX < 0 {
+		a.paletteScrollX = 0
+	}
+	if a.paletteScrollX > mx {
+		a.paletteScrollX = mx
 	}
 }
 
@@ -113,13 +150,17 @@ func (a *App) inGridArea(mx, my int) bool {
 	return my >= paletteGridTop() && my < a.gridBottom()
 }
 
-// handlePaletteScroll вызывать при ненулевом колесе; возвращает true, если прокрутка ушла в палитру.
-func (a *App) handlePaletteScroll(mx, my int, wheelY float64) bool {
-	if wheelY == 0 || !a.inGridArea(mx, my) {
+// handlePaletteScroll колесо над сеткой: вертикаль и горизонталь (широкий лист).
+func (a *App) handlePaletteScroll(mx, my int, wheelX, wheelY float64) bool {
+	if (wheelX == 0 && wheelY == 0) || !a.inGridArea(mx, my) {
 		return false
 	}
-	delta := int(math.Round(wheelY * 24))
-	a.paletteScroll += delta
+	if wheelY != 0 {
+		a.paletteScroll += int(math.Round(wheelY * 24))
+	}
+	if wheelX != 0 {
+		a.paletteScrollX += int(math.Round(wheelX * 24))
+	}
 	a.clampScroll()
 	return true
 }
@@ -167,13 +208,13 @@ func (a *App) handlePaletteClick(mx, my int) bool {
 	if inRect(mx, my, px+pad, yTabs, half, tabH) {
 		a.pickTilesets = true
 		a.clampTileIdx()
-		a.paletteScroll = 0
+		a.paletteScroll, a.paletteScrollX = 0, 0
 		return true
 	}
 	if inRect(mx, my, px+pad+half, yTabs, paletteW-2*pad-half, tabH) {
 		a.pickTilesets = false
 		a.clampSingleIdx()
-		a.paletteScroll = 0
+		a.paletteScroll, a.paletteScrollX = 0, 0
 		return true
 	}
 
@@ -183,12 +224,12 @@ func (a *App) handlePaletteClick(mx, my int) bool {
 		btnW := 32
 		if inRect(mx, my, px+pad, ySet, btnW, setRowH) {
 			a.nextSet(-1)
-			a.paletteScroll = 0
+			a.paletteScroll, a.paletteScrollX = 0, 0
 			return true
 		}
 		if inRect(mx, my, px+paletteW-pad-btnW, ySet, btnW, setRowH) {
 			a.nextSet(1)
-			a.paletteScroll = 0
+			a.paletteScroll, a.paletteScrollX = 0, 0
 			return true
 		}
 	}
@@ -203,11 +244,11 @@ func (a *App) handlePaletteClick(mx, my int) bool {
 		if n <= 0 {
 			return true
 		}
-		cols := a.gridCols()
+		cols := a.tilesetPaletteCols()
 		step := a.thumbStep()
-		relX := mx - (px + pad)
+		relX := mx - (px + pad) + a.paletteScrollX
 		relY := my - paletteGridTop() + a.paletteScroll
-		if relX < 0 || relY < 0 {
+		if relY < 0 {
 			return true
 		}
 		col := relX / step
@@ -366,17 +407,22 @@ func (a *App) drawPalette(dst *ebiten.Image) {
 
 	if a.pickTilesets {
 		n := a.tileCount()
-		cols := a.gridCols()
+		cols := a.tilesetPaletteCols()
 		step := float32(a.thumbStep())
 		base := a.currentSet()
+		viewL := px + float32(pad)
+		viewR := px + float32(paletteW-pad)
 		for i := 0; i < n; i++ {
 			key := tiles.TextureKey(base, i)
 			img := tiles.ImageForTexture(key)
 			col := i % cols
 			row := i / cols
-			cx := px + float32(pad) + float32(col)*step
+			cx := px + float32(pad) + float32(col)*step - float32(a.paletteScrollX)
 			cy := gy0 + float32(row)*step - float32(a.paletteScroll)
 			if cy+float32(thumbSize) < gy0 || cy > gy0+gh {
+				continue
+			}
+			if cx+float32(thumbSize) < viewL || cx > viewR {
 				continue
 			}
 			vector.DrawFilledRect(dst, cx, cy, float32(thumbSize), float32(thumbSize), color.RGBA{0x26, 0x26, 0x30, 0xff}, false)
