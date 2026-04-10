@@ -475,5 +475,5 @@ func (a *App) mapTileFromCursor(mx, my int) (tx, ty int, ok bool) {
 	if mx >= a.paletteX() {
 		return 0, 0, false
 	}
-	return world.TileFromScreen(mx, my)
+	return world.TileFromScreenWithCam(mx, my, a.camX, a.camY)
 }

@@ -81,12 +81,14 @@ func imageForTexture(name string) *ebiten.Image {
 type DrawOpts struct {
 	// OutlineBlocking — красная рамка для клеток с коллизией (редактор).
 	OutlineBlocking bool
+	// CamX, CamY — смещение камеры в px (редактор); в игре оставлять 0.
+	CamX, CamY float32
 }
 
 // Draw рисует один тайл: текстура из assets либо сплошная заливка-заглушка.
 func Draw(screen *ebiten.Image, t gamekit.Tile, opts DrawOpts) {
-	x0 := float32(world.GridPad) + float32(t.X)*float32(world.TileSize)
-	y0 := float32(world.GridPad) + float32(t.Y)*float32(world.TileSize)
+	x0 := float32(world.GridPad) + float32(t.X)*float32(world.TileSize) - opts.CamX
+	y0 := float32(world.GridPad) + float32(t.Y)*float32(world.TileSize) - opts.CamY
 	ts := float32(world.TileSize)
 
 	img := imageForTexture(t.Texture)

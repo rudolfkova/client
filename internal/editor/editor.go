@@ -31,6 +31,7 @@ const (
 	maxEditLayer     = 31
 	maxSaveNameRunes = 120
 	saveToastDur     = 7 * time.Second
+	cameraPanSpeed   = float32(14) // px за кадр при удержании стрелки
 )
 
 // App — клиент редактора мира: spawn_tile по клику, превью состояния с game WS.
@@ -49,6 +50,8 @@ type App struct {
 	paletteScroll  int // вертикаль сетки палитры
 	paletteScrollX int // горизонталь (если сетка шире панели)
 	winW, winH     int
+
+	camX, camY float32 // камера: мир сдвигается на экране (px)
 
 	editLayer    int // слой spawn_tile / clear_tile
 	editRotation int // четверти по часовой, 0..3
@@ -101,6 +104,10 @@ func (a *App) decLayer() {
 
 func (a *App) stepRotation(delta int) {
 	a.editRotation = tiles.NormalizeRotationQuarter(a.editRotation + delta)
+}
+
+func (a *App) shiftPaletteKeys() bool {
+	return ebiten.IsKeyPressed(ebiten.KeyShiftLeft) || ebiten.IsKeyPressed(ebiten.KeyShiftRight)
 }
 
 func (a *App) currentSet() string {
@@ -277,7 +284,20 @@ func (a *App) Update() error {
 	if inpututil.IsKeyJustPressed(ebiten.KeySpace) {
 		a.blocks = !a.blocks
 	}
-	if a.pickTilesets {
+	if !a.shiftPaletteKeys() {
+		if ebiten.IsKeyPressed(ebiten.KeyArrowLeft) {
+			a.camX -= cameraPanSpeed
+		}
+		if ebiten.IsKeyPressed(ebiten.KeyArrowRight) {
+			a.camX += cameraPanSpeed
+		}
+		if ebiten.IsKeyPressed(ebiten.KeyArrowUp) {
+			a.camY -= cameraPanSpeed
+		}
+		if ebiten.IsKeyPressed(ebiten.KeyArrowDown) {
+			a.camY += cameraPanSpeed
+		}
+	} else if a.pickTilesets {
 		if inpututil.IsKeyJustPressed(ebiten.KeyArrowLeft) {
 			n := a.tileCount()
 			if n > 0 {
@@ -353,8 +373,9 @@ func (a *App) Draw(screen *ebiten.Image) {
 		}
 		return x.Layer - y.Layer
 	})
+	camOpts := tiles.DrawOpts{OutlineBlocking: true, CamX: a.camX, CamY: a.camY}
 	for _, t := range tileList {
-		tiles.Draw(screen, t, tiles.DrawOpts{OutlineBlocking: true})
+		tiles.Draw(screen, t, camOpts)
 	}
 
 	ids := make([]int64, 0, len(a.World.Players))
@@ -366,6 +387,8 @@ func (a *App) Draw(screen *ebiten.Image) {
 	for _, id := range ids {
 		pl := a.World.Players[id]
 		cx, cy := world.ToScreen(pl.X, pl.Y)
+		cx -= a.camX
+		cy -= a.camY
 		fill := playerColor(id)
 		vector.DrawFilledCircle(screen, cx, cy, world.PlayerRadius, fill, true)
 		vector.StrokeCircle(screen, cx, cy, world.PlayerRadius, 1.5, color.RGBA{0xff, 0xff, 0xff, 0x90}, true)
@@ -380,7 +403,7 @@ func (a *App) Draw(screen *ebiten.Image) {
 
 	a.drawPalette(screen)
 
-	line1 := "ЛКМ — тайл · ПКМ — слой · F2 — сохранить мир · , . слой · R поворот · колёсико на сетке"
+	line1 := "Стрелки — камера · Shift+стрелки — палитра · ЛКМ/ПКМ тайл · F2 сохранить · , . слой · R поворот"
 	hudFace := &textv2.GoTextFace{Source: ui.FontSource(), Size: 14}
 	hudOpts := &textv2.DrawOptions{}
 	hudOpts.ColorScale.ScaleWithColor(color.RGBA{0xf0, 0xf0, 0xf0, 0xff})
