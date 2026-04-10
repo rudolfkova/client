@@ -1,13 +1,13 @@
 package editor
 
 import (
+	"fmt"
 	"image/color"
 	"math"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	textv2 "github.com/hajimehoshi/ebiten/v2/text/v2"
 	"github.com/hajimehoshi/ebiten/v2/vector"
-
 	"client/internal/tiles"
 	"client/internal/ui"
 	"client/internal/world"
@@ -22,12 +22,19 @@ const (
 	blocksH      = 20
 	tabH         = 22
 	setRowH      = 22
-	gridTopFixed = pad + previewSize + 4 + lineH + 4 + blocksH + 4 + tabH + 4 + setRowH + 6
-
-	thumbSize = 36
-	thumbGap  = 4
-	rowH      = 44 // одиночные тайлы, одна колонка
+	metaRowH     = 22 // слой и поворот
+	thumbSize    = 36
+	thumbGap     = 4
+	rowH         = 44 // одиночные тайлы, одна колонка
 )
+
+func paletteYLayerRow() int  { return pad + previewSize + 4 }
+func paletteYRotRow() int    { return paletteYLayerRow() + metaRowH + 4 }
+func paletteYKey() int       { return paletteYRotRow() + metaRowH + 4 }
+func paletteYBlocks() int    { return paletteYKey() + lineH + 4 }
+func paletteYTabs() int      { return paletteYBlocks() + blocksH + 4 }
+func paletteYSetRow() int    { return paletteYTabs() + tabH + 4 }
+func paletteGridTop() int    { return paletteYSetRow() + setRowH + 6 }
 
 func (a *App) paletteX() int {
 	if a.winW <= paletteW {
@@ -66,7 +73,7 @@ func (a *App) maxPaletteScroll() int {
 		cols := a.gridCols()
 		rows := (n + cols - 1) / cols
 		h := rows*a.thumbStep() - thumbGap
-		avail := a.gridBottom() - gridTopFixed
+		avail := a.gridBottom() - paletteGridTop()
 		if h <= avail {
 			return 0
 		}
@@ -74,7 +81,7 @@ func (a *App) maxPaletteScroll() int {
 	}
 	keys := tiles.EditorSingleTextureKeys()
 	h := len(keys) * rowH
-	avail := a.gridBottom() - gridTopFixed
+	avail := a.gridBottom() - paletteGridTop()
 	if h <= avail {
 		return 0
 	}
@@ -103,7 +110,7 @@ func (a *App) inGridArea(mx, my int) bool {
 	if !a.inPalette(mx, my) {
 		return false
 	}
-	return my >= gridTopFixed && my < a.gridBottom()
+	return my >= paletteGridTop() && my < a.gridBottom()
 }
 
 // handlePaletteScroll вызывать при ненулевом колесе; возвращает true, если прокрутка ушла в палитру.
@@ -123,16 +130,39 @@ func (a *App) handlePaletteClick(mx, my int) bool {
 		return false
 	}
 	px := a.paletteX()
+	btnW := 32
+
+	// Слой
+	yl := paletteYLayerRow()
+	if inRect(mx, my, px+pad, yl, btnW, metaRowH) {
+		a.decLayer()
+		return true
+	}
+	if inRect(mx, my, px+paletteW-pad-btnW, yl, btnW, metaRowH) {
+		a.incLayer()
+		return true
+	}
+
+	// Поворот (четверти по часовой)
+	yr := paletteYRotRow()
+	if inRect(mx, my, px+pad, yr, btnW, metaRowH) {
+		a.stepRotation(-1)
+		return true
+	}
+	if inRect(mx, my, px+paletteW-pad-btnW, yr, btnW, metaRowH) {
+		a.stepRotation(1)
+		return true
+	}
 
 	// Коллизия
-	yBlocks := pad + previewSize + 4 + lineH + 4
+	yBlocks := paletteYBlocks()
 	if inRect(mx, my, px+pad, yBlocks, paletteW-2*pad, blocksH) {
 		a.blocks = !a.blocks
 		return true
 	}
 
 	// Вкладки
-	yTabs := yBlocks + blocksH + 4
+	yTabs := paletteYTabs()
 	half := (paletteW - 2*pad) / 2
 	if inRect(mx, my, px+pad, yTabs, half, tabH) {
 		a.pickTilesets = true
@@ -148,7 +178,7 @@ func (a *App) handlePaletteClick(mx, my int) bool {
 	}
 
 	// Смена набора (только тайлсеты)
-	ySet := yTabs + tabH + 4
+	ySet := paletteYSetRow()
 	if a.pickTilesets {
 		btnW := 32
 		if inRect(mx, my, px+pad, ySet, btnW, setRowH) {
@@ -164,7 +194,7 @@ func (a *App) handlePaletteClick(mx, my int) bool {
 	}
 
 	// Сетка / список
-	if my < gridTopFixed || my >= a.gridBottom() {
+	if my < paletteGridTop() || my >= a.gridBottom() {
 		return true // клик по палитре, но не по полю
 	}
 
@@ -176,7 +206,7 @@ func (a *App) handlePaletteClick(mx, my int) bool {
 		cols := a.gridCols()
 		step := a.thumbStep()
 		relX := mx - (px + pad)
-		relY := my - gridTopFixed + a.paletteScroll
+		relY := my - paletteGridTop() + a.paletteScroll
 		if relX < 0 || relY < 0 {
 			return true
 		}
@@ -196,7 +226,7 @@ func (a *App) handlePaletteClick(mx, my int) bool {
 	if len(keys) == 0 {
 		return true
 	}
-	relY := my - gridTopFixed + a.paletteScroll
+	relY := my - paletteGridTop() + a.paletteScroll
 	if relY < 0 {
 		return true
 	}
@@ -221,26 +251,56 @@ func (a *App) drawPalette(dst *ebiten.Image) {
 	prevImg := tiles.ImageForTexture(tex)
 	pvx := px + float32(paletteW/2-previewSize/2)
 	pvy := float32(pad)
+	pcx := pvx + float32(previewSize)/2
+	pcy := pvy + float32(previewSize)/2
 	vector.DrawFilledRect(dst, pvx-2, pvy-2, float32(previewSize)+4, float32(previewSize)+4, color.RGBA{0x30, 0x30, 0x3a, 0xff}, false)
 	if prevImg != nil {
-		w, h0 := prevImg.Bounds().Dx(), prevImg.Bounds().Dy()
-		op := &ebiten.DrawImageOptions{}
-		if w > 0 && h0 > 0 {
-			op.GeoM.Scale(float64(previewSize)/float64(w), float64(previewSize)/float64(h0))
-		}
-		op.GeoM.Translate(float64(pvx), float64(pvy))
-		dst.DrawImage(prevImg, op)
+		tiles.DrawTextureScaledRotated(dst, prevImg, pcx, pcy, float32(previewSize), a.editRotation)
 	} else {
 		vector.DrawFilledRect(dst, pvx, pvy, float32(previewSize), float32(previewSize), color.RGBA{0x40, 0x40, 0x50, 0xff}, false)
 	}
 
-	yKey := float32(pad + previewSize + 4)
+	btnWF := float32(32)
+	yl := float32(paletteYLayerRow())
+	vector.DrawFilledRect(dst, px+pad, yl, btnWF, float32(metaRowH), color.RGBA{0x3a, 0x3a, 0x48, 0xff}, false)
+	vector.DrawFilledRect(dst, px+float32(paletteW-pad)-btnWF, yl, btnWF, float32(metaRowH), color.RGBA{0x3a, 0x3a, 0x48, 0xff}, false)
 	opts := &textv2.DrawOptions{}
+	opts.ColorScale.ScaleWithColor(color.RGBA{0xff, 0xff, 0xff, 0xff})
+	opts.GeoM.Translate(float64(px+pad+9), float64(yl+4))
+	textv2.Draw(dst, "◀", face, opts)
+	opts.GeoM.Reset()
+	opts.GeoM.Translate(float64(px+float32(paletteW-pad)-23), float64(yl+4))
+	textv2.Draw(dst, "▶", face, opts)
+	opts = &textv2.DrawOptions{}
+	opts.PrimaryAlign = textv2.AlignCenter
+	opts.GeoM.Translate(float64(px+float32(paletteW)/2), float64(yl+4))
+	opts.ColorScale.ScaleWithColor(color.RGBA{0xd0, 0xd0, 0xd8, 0xff})
+	textv2.Draw(dst, fmt.Sprintf("слой %d", a.editLayer), small, opts)
+
+	yr := float32(paletteYRotRow())
+	vector.DrawFilledRect(dst, px+pad, yr, btnWF, float32(metaRowH), color.RGBA{0x3a, 0x3a, 0x48, 0xff}, false)
+	vector.DrawFilledRect(dst, px+float32(paletteW-pad)-btnWF, yr, btnWF, float32(metaRowH), color.RGBA{0x3a, 0x3a, 0x48, 0xff}, false)
+	opts = &textv2.DrawOptions{}
+	opts.ColorScale.ScaleWithColor(color.RGBA{0xff, 0xff, 0xff, 0xff})
+	opts.GeoM.Translate(float64(px+pad+9), float64(yr+4))
+	textv2.Draw(dst, "◀", face, opts)
+	opts.GeoM.Reset()
+	opts.GeoM.Translate(float64(px+float32(paletteW-pad)-23), float64(yr+4))
+	textv2.Draw(dst, "▶", face, opts)
+	q := tiles.NormalizeRotationQuarter(a.editRotation)
+	opts = &textv2.DrawOptions{}
+	opts.PrimaryAlign = textv2.AlignCenter
+	opts.GeoM.Translate(float64(px+float32(paletteW)/2), float64(yr+4))
+	opts.ColorScale.ScaleWithColor(color.RGBA{0xd0, 0xd0, 0xd8, 0xff})
+	textv2.Draw(dst, fmt.Sprintf("↻ %d×90°", q), small, opts)
+
+	yKey := float32(paletteYKey())
+	opts = &textv2.DrawOptions{}
 	opts.ColorScale.ScaleWithColor(color.RGBA{0xe8, 0xe8, 0xec, 0xff})
 	opts.GeoM.Translate(float64(px+pad), float64(yKey))
 	textv2.Draw(dst, tex, small, opts)
 
-	yBlocks := float32(pad + previewSize + 4 + lineH + 4)
+	yBlocks := float32(paletteYBlocks())
 	btxt := "Коллизия: нет"
 	if a.blocks {
 		btxt = "Коллизия: да"
@@ -251,7 +311,7 @@ func (a *App) drawPalette(dst *ebiten.Image) {
 	opts.GeoM.Translate(float64(px+pad+6), float64(yBlocks+4))
 	textv2.Draw(dst, btxt, face, opts)
 
-	yTabs := yBlocks + float32(blocksH+4)
+	yTabs := float32(paletteYTabs())
 	half := float32(paletteW-2*pad) / 2
 	tabHi := color.RGBA{0x38, 0x38, 0x48, 0xff}
 	tabLo := color.RGBA{0x24, 0x24, 0x2e, 0xff}
@@ -271,7 +331,7 @@ func (a *App) drawPalette(dst *ebiten.Image) {
 	opts.GeoM.Translate(float64(px+pad+half+8), float64(yTabs+4))
 	textv2.Draw(dst, "Отдельные", face, opts)
 
-	ySet := yTabs + float32(tabH+4)
+	ySet := float32(paletteYSetRow())
 	if a.pickTilesets {
 		setName := a.currentSet()
 		if len(setName) > 22 {
@@ -296,12 +356,12 @@ func (a *App) drawPalette(dst *ebiten.Image) {
 		opts = &textv2.DrawOptions{}
 		opts.ColorScale.ScaleWithColor(color.RGBA{0x88, 0x88, 0x98, 0xff})
 		opts.GeoM.Translate(float64(px+pad), float64(ySet+4))
-		textv2.Draw(dst, "grass · water · path", small, opts)
+		textv2.Draw(dst, "PNG в папке assets/", small, opts)
 	}
 
 	// Сетка миниатюр
-	gy0 := float32(gridTopFixed)
-	gh := float32(a.gridBottom() - gridTopFixed)
+	gy0 := float32(paletteGridTop())
+	gh := float32(a.gridBottom() - paletteGridTop())
 	vector.DrawFilledRect(dst, px+pad, gy0, float32(paletteW-2*pad), gh, color.RGBA{0x18, 0x18, 0x1e, 0xff}, false)
 
 	if a.pickTilesets {

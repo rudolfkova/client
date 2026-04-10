@@ -165,7 +165,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		}
 		return a.X - b.X
 	})
-	// Текстуры из state.Texture: Beach_Tile_N (тайлсеты 16×16) и legacy grass/water/path — см. internal/tiles.
+	// Текстуры из state.Texture: Base_N из assets/tileSets и одиночные ключи = имя PNG в корне assets/.
 	for _, t := range tileList {
 		tiles.Draw(screen, t, tiles.DrawOpts{})
 	}

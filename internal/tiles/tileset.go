@@ -18,15 +18,6 @@ import (
 // Cell — размер одной клетки в тайлсете (px).
 const Cell = 16
 
-// Имена тайлсетов (без .png) в порядке переключения в редакторе (файлы: assets/tileSets/<имя>.png).
-var editorTileSetBases = []string{
-	"Beach_Tile",
-	"Cliff_Tile",
-	"FarmLand_Tile",
-	"Path_Tile",
-	"Water_Tile",
-}
-
 var (
 	setMu          sync.Mutex
 	setTileCount   = make(map[string]int)            // base -> число тайлов после успешной нарезки
@@ -67,18 +58,6 @@ func TileCountInSet(setBase string) int {
 	setMu.Lock()
 	defer setMu.Unlock()
 	return setTileCount[setBase]
-}
-
-func init() {
-	for _, base := range editorTileSetBases {
-		path := "assets/tileSets/" + base + ".png"
-		if _, err := registerTilesetPNG(path, base); err != nil {
-			log.Printf("tiles: тайлсет %s: %v", base, err)
-			setMu.Lock()
-			setLoadFailed[base] = struct{}{}
-			setMu.Unlock()
-		}
-	}
 }
 
 // ensureTilesetLoaded подгружает assets/tileSets/<base>.png и нарезает клетки (для игрового клиента и новых имён с сервера).

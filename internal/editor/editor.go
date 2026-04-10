@@ -23,6 +23,8 @@ import (
 const (
 	WindowWidth  = 1600
 	WindowHeight = 800
+
+	maxEditLayer = 31
 )
 
 // App — клиент редактора мира: spawn_tile по клику, превью состояния с game WS.
@@ -36,10 +38,13 @@ type App struct {
 	tileIdx  int // 0-based внутри набора → на wire Beach_Tile_{tileIdx+1}
 	blocks   bool
 
-	pickTilesets  bool // true: тайлсеты, false: grass/water/path
+	pickTilesets  bool // true: тайлсеты из assets/tileSets, false: корневые PNG в assets/
 	singleIdx     int
 	paletteScroll int
 	winW, winH    int
+
+	editLayer    int // слой spawn_tile / clear_tile
+	editRotation int // четверти по часовой, 0..3
 }
 
 func New(wsGame *websocket.Conn, msgs <-chan gamekit.Envelope) *App {
@@ -64,7 +69,25 @@ func New(wsGame *websocket.Conn, msgs <-chan gamekit.Envelope) *App {
 		singleIdx:    0,
 		winW:         WindowWidth,
 		winH:         WindowHeight,
+		editLayer:    0,
+		editRotation: 0,
 	}
+}
+
+func (a *App) incLayer() {
+	if a.editLayer < maxEditLayer {
+		a.editLayer++
+	}
+}
+
+func (a *App) decLayer() {
+	if a.editLayer > 0 {
+		a.editLayer--
+	}
+}
+
+func (a *App) stepRotation(delta int) {
+	a.editRotation = tiles.NormalizeRotationQuarter(a.editRotation + delta)
 }
 
 func (a *App) currentSet() string {
@@ -150,6 +173,16 @@ func (a *App) Update() error {
 			_, wy := ebiten.Wheel()
 			a.handlePaletteScroll(mx, my, wy)
 
+			if inpututil.IsKeyJustPressed(ebiten.KeyComma) {
+				a.decLayer()
+			}
+			if inpututil.IsKeyJustPressed(ebiten.KeyPeriod) {
+				a.incLayer()
+			}
+			if inpututil.IsKeyJustPressed(ebiten.KeyR) {
+				a.stepRotation(1)
+			}
+
 			if inpututil.IsKeyJustPressed(ebiten.KeySpace) {
 				a.blocks = !a.blocks
 			}
@@ -190,13 +223,25 @@ func (a *App) Update() error {
 				if !a.handlePaletteClick(mx, my) {
 					if tx, ty, ok := a.mapTileFromCursor(mx, my); ok {
 						intent := gamekit.TileSpawnIntent{
-							X:       tx,
-							Y:       ty,
-							Texture: a.texture(),
-							Blocks:  a.blocks,
+							X:        tx,
+							Y:        ty,
+							Layer:    a.editLayer,
+							Rotation: tiles.NormalizeRotationQuarter(a.editRotation),
+							Texture:  a.texture(),
+							Blocks:   a.blocks,
 						}
 						if err := gamews.Send(a.wsGame, gamekit.TypeSpawnTile, intent); err != nil {
 							log.Printf("editor spawn_tile: %v", err)
+						}
+					}
+				}
+			}
+			if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonRight) {
+				if !a.inPalette(mx, my) {
+					if tx, ty, ok := a.mapTileFromCursor(mx, my); ok {
+						cl := gamekit.TileClearIntent{X: tx, Y: ty, Layer: a.editLayer}
+						if err := gamews.Send(a.wsGame, gamekit.TypeClearTile, cl); err != nil {
+							log.Printf("editor clear_tile: %v", err)
 						}
 					}
 				}
@@ -214,7 +259,10 @@ func (a *App) Draw(screen *ebiten.Image) {
 		if x.Y != y.Y {
 			return x.Y - y.Y
 		}
-		return x.X - y.X
+		if x.X != y.X {
+			return x.X - y.X
+		}
+		return x.Layer - y.Layer
 	})
 	for _, t := range tileList {
 		tiles.Draw(screen, t, tiles.DrawOpts{OutlineBlocking: true})
@@ -243,7 +291,7 @@ func (a *App) Draw(screen *ebiten.Image) {
 
 	a.drawPalette(screen)
 
-	line1 := "ЛКМ на поле — тайл · Пробел — коллизия · Палитра справа: сетка, вкладки, предпросмотр"
+	line1 := "ЛКМ — тайл · ПКМ — очистить слой в клетке · , . — слой · R — поворот · Пробел — коллизия"
 	hudFace := &textv2.GoTextFace{Source: ui.FontSource(), Size: 14}
 	hudOpts := &textv2.DrawOptions{}
 	hudOpts.ColorScale.ScaleWithColor(color.RGBA{0xf0, 0xf0, 0xf0, 0xff})

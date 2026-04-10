@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"image/color"
 	"image/png"
+	"math"
 	"slices"
 	"sync"
 
@@ -15,27 +16,20 @@ import (
 	"client/internal/world"
 )
 
-// Имена текстур на wire (state / spawn_tile) → файлы в data/assets.
-var assetFiles = map[string]string{
-	"grass": "Grass_Middle.png",
-	"water": "Water_Middle.png",
-	"path":  "Path_Middle.png",
-}
-
 var (
 	imgMu   sync.Mutex
 	imgByID = make(map[string]*ebiten.Image)
 )
 
-// ImageForTexture картинка для ключа (тайлсет или grass/water/path); nil если неизвестно.
+// ImageForTexture картинка для ключа (тайлсет Base_N или одиночный PNG из корня assets/); nil если неизвестно.
 func ImageForTexture(name string) *ebiten.Image {
 	return imageForTexture(name)
 }
 
-// EditorSingleTextureKeys отдельные текстуры из assets/tiles (wire-ключи), по алфавиту.
+// EditorSingleTextureKeys отдельные PNG из корня assets/ (не tileSets), ключ = имя файла без .png.
 func EditorSingleTextureKeys() []string {
-	keys := make([]string, 0, len(assetFiles))
-	for k := range assetFiles {
+	keys := make([]string, 0, len(singleTextureFiles))
+	for k := range singleTextureFiles {
 		keys = append(keys, k)
 	}
 	slices.Sort(keys)
@@ -66,11 +60,11 @@ func imageForTexture(name string) *ebiten.Image {
 	if img, ok := imgByID[name]; ok {
 		return img
 	}
-	file, ok := assetFiles[name]
+	path, ok := singleTextureFiles[name]
 	if !ok {
 		return nil
 	}
-	raw, err := data.TileAssets.ReadFile("assets/" + file)
+	raw, err := data.TileAssets.ReadFile(path)
 	if err != nil {
 		return nil
 	}
@@ -97,13 +91,7 @@ func Draw(screen *ebiten.Image, t gamekit.Tile, opts DrawOpts) {
 
 	img := imageForTexture(t.Texture)
 	if img != nil {
-		w, h := img.Bounds().Dx(), img.Bounds().Dy()
-		op := &ebiten.DrawImageOptions{}
-		if w > 0 && h > 0 {
-			op.GeoM.Scale(float64(ts)/float64(w), float64(ts)/float64(h))
-		}
-		op.GeoM.Translate(float64(x0), float64(y0))
-		screen.DrawImage(img, op)
+		DrawTextureScaledRotated(screen, img, x0+ts/2, y0+ts/2, ts, t.Rotation)
 	} else {
 		fill := color.RGBA{0x44, 0x44, 0x55, 0xee}
 		if !t.Blocks {
@@ -116,4 +104,24 @@ func Draw(screen *ebiten.Image, t gamekit.Tile, opts DrawOpts) {
 		const stroke float32 = 2
 		vector.StrokeRect(screen, x0, y0, ts, ts, stroke, color.RGBA{0xe0, 0x30, 0x30, 0xff}, false)
 	}
+}
+
+// DrawTextureScaledRotated — центр (cx, cy), сторона квадрата size, четверти по часовой (как на сервере).
+func DrawTextureScaledRotated(dst *ebiten.Image, img *ebiten.Image, cx, cy, size float32, rotationQuarter int) {
+	if img == nil {
+		return
+	}
+	w, h := img.Bounds().Dx(), img.Bounds().Dy()
+	if w <= 0 || h <= 0 {
+		return
+	}
+	q := NormalizeRotationQuarter(rotationQuarter)
+	op := &ebiten.DrawImageOptions{}
+	sx := float64(size) / float64(w)
+	sy := float64(size) / float64(h)
+	op.GeoM.Translate(-float64(w)/2, -float64(h)/2)
+	op.GeoM.Scale(sx, sy)
+	op.GeoM.Rotate(float64(q) * math.Pi / 2)
+	op.GeoM.Translate(float64(cx), float64(cy))
+	dst.DrawImage(img, op)
 }
