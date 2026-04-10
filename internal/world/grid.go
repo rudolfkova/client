@@ -1,5 +1,7 @@
 package world
 
+import "math"
+
 const (
 	TileSize      = 48
 	GridPad       = 40.0
@@ -14,7 +16,7 @@ func ToScreen(tileX, tileY int) (cx, cy float32) {
 	return cx, cy
 }
 
-// TileFromScreen возвращает координаты клетки под курсором; ok=false если вне сетки по осям.
+// TileFromScreen возвращает индекс клетки под курсором (в т.ч. отрицательные x/y), согласованно с tiles.Draw и ToScreen.
 func TileFromScreen(mx, my int) (tx, ty int, ok bool) {
 	return TileFromScreenWithCam(mx, my, 0, 0)
 }
@@ -23,13 +25,8 @@ func TileFromScreen(mx, my int) (tx, ty int, ok bool) {
 func TileFromScreenWithCam(mx, my int, camX, camY float32) (tx, ty int, ok bool) {
 	fx := float32(mx) + camX
 	fy := float32(my) + camY
-	if fx < float32(GridPad) || fy < float32(GridPad) {
-		return 0, 0, false
-	}
-	tx = int((fx - float32(GridPad)) / TileSize)
-	ty = int((fy - float32(GridPad)) / TileSize)
-	if tx < 0 || ty < 0 {
-		return 0, 0, false
-	}
+	// Floor, как для положительных координат, так и для отрицательных (int отрицательной дроби в Go — к нулю, не к −∞).
+	tx = int(math.Floor(float64(fx-float32(GridPad)) / float64(TileSize)))
+	ty = int(math.Floor(float64(fy-float32(GridPad)) / float64(TileSize)))
 	return tx, ty, true
 }
