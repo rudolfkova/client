@@ -11,8 +11,14 @@ const (
 )
 
 func ToScreen(tileX, tileY int) (cx, cy float32) {
-	cx = float32(GridPad) + float32(tileX)*TileSize + TileSize*0.5
-	cy = float32(GridPad) + float32(tileY)*TileSize + TileSize*0.5
+	return ToScreenCenterF(float32(tileX), float32(tileY))
+}
+
+// ToScreenCenterF центр «клетки» в дробных координатах сетки (для плавного движения спрайта).
+func ToScreenCenterF(tileX, tileY float32) (cx, cy float32) {
+	ts := float32(TileSize)
+	cx = float32(GridPad) + tileX*ts + ts*0.5
+	cy = float32(GridPad) + tileY*ts + ts*0.5
 	return cx, cy
 }
 

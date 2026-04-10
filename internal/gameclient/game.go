@@ -30,6 +30,10 @@ const (
 
 	// camFollowLambda — скорость догонки цели (эксп. сглаживание); больше = меньше инерции.
 	camFollowLambda = 9.0
+	// playerVisLambda — как быстро визуальная позиция догоняет сетку с сервера; больше = меньше «волочения».
+	playerVisLambda = 14.0
+	// при скачке цели дальше этого (в клетках) — мгновенный snap, без длинного догона
+	playerVisSnapTilesSq = 2.25 // 1.5²
 )
 
 type Game struct {
@@ -47,6 +51,7 @@ type Game struct {
 
 	lastMoveDx, lastMoveDy int
 	camX, camY             float32
+	visTile                map[int64]struct{ X, Y float32 }
 
 	lobbyLines    []lobby.Line
 	lobbyDraft    string
@@ -69,6 +74,7 @@ func NewGame(accessToken, refreshToken string, userID int64, lobbyChatID int64, 
 		wsLobbyPush: wsLobbyPush,
 
 		World:         state.NewWorld(),
+		visTile:       make(map[int64]struct{ X, Y float32 }),
 		lobbyLines:    lobbyLines,
 		lobbyChatSize: 13,
 		lobbyChatID:   lobbyChatID,
@@ -117,19 +123,27 @@ func (g *Game) Update() error {
 				}
 			} else {
 				dx, dy := arrowDirection()
-				if dx != g.lastMoveDx || dy != g.lastMoveDy {
-					g.lastMoveDx, g.lastMoveDy = dx, dy
+				moving := dx != 0 || dy != 0
+				wasMoving := g.lastMoveDx != 0 || g.lastMoveDy != 0
+				if moving {
 					if err := gamews.Send(g.wsGame, gamekit.TypeMove, gamekit.MoveIntent{DX: dx, DY: dy}); err != nil {
 						log.Printf("ws write: %v", err)
 						return err
 					}
+				} else if wasMoving {
+					if err := gamews.Send(g.wsGame, gamekit.TypeMove, gamekit.MoveIntent{DX: 0, DY: 0}); err != nil {
+						log.Printf("ws write: %v", err)
+						return err
+					}
 				}
+				g.lastMoveDx, g.lastMoveDy = dx, dy
 				target, damage := hitPlayer()
 				if err := gamews.Send(g.wsGame, gamekit.TypeHit, gamekit.HitIntent{TargetID: target, Damage: damage}); err != nil {
 					log.Printf("ws write: %v", err)
 					return err
 				}
 			}
+			g.tickPlayerVis()
 			g.tickCamera()
 			return nil
 		}
@@ -160,13 +174,17 @@ func hitPlayer() (target int64, damage int) {
 	return target, damage
 }
 
-// cameraTarget мгновенная позиция камеры: центр окна на игроке; без игрока — (0,0).
+// cameraTarget мгновенная позиция камеры: центр окна на игроке (по сглаженным координатам); без игрока — (0,0).
 func (g *Game) cameraTarget() (tx, ty float32) {
 	pl, ok := g.World.Players[g.userID]
 	if !ok {
 		return 0, 0
 	}
-	px, py := world.ToScreen(pl.X, pl.Y)
+	vx, vy := float32(pl.X), float32(pl.Y)
+	if v, ok := g.visTile[g.userID]; ok {
+		vx, vy = v.X, v.Y
+	}
+	px, py := world.ToScreenCenterF(vx, vy)
 	ww, wh := ebiten.WindowSize()
 	return px - float32(ww)*0.5, py - float32(wh)*0.5
 }
@@ -183,6 +201,36 @@ func (g *Game) tickCamera() {
 }
 
 func (g *Game) viewCam() (camX, camY float32) { return g.camX, g.camY }
+
+func (g *Game) tickPlayerVis() {
+	dt := 1.0 / 60.0
+	if tps := ebiten.ActualTPS(); tps > 1 {
+		dt = 1.0 / tps
+	}
+	f := float32(1 - math.Exp(-playerVisLambda*dt))
+
+	for id := range g.visTile {
+		if _, ok := g.World.Players[id]; !ok {
+			delete(g.visTile, id)
+		}
+	}
+	for id, pl := range g.World.Players {
+		tx, ty := float32(pl.X), float32(pl.Y)
+		v, ok := g.visTile[id]
+		if !ok {
+			g.visTile[id] = struct{ X, Y float32 }{tx, ty}
+			continue
+		}
+		dx, dy := tx-v.X, ty-v.Y
+		if dx*dx+dy*dy > playerVisSnapTilesSq {
+			v.X, v.Y = tx, ty
+		} else {
+			v.X += dx * f
+			v.Y += dy * f
+		}
+		g.visTile[id] = v
+	}
+}
 
 func (g *Game) Draw(screen *ebiten.Image) {
 	screen.Clear()
@@ -218,7 +266,11 @@ func (g *Game) Draw(screen *ebiten.Image) {
 
 	for _, id := range ids {
 		pl := g.World.Players[id]
-		cx, cy := world.ToScreen(pl.X, pl.Y)
+		vx, vy := float32(pl.X), float32(pl.Y)
+		if v, ok := g.visTile[id]; ok {
+			vx, vy = v.X, v.Y
+		}
+		cx, cy := world.ToScreenCenterF(vx, vy)
 		cx -= camX
 		cy -= camY
 		fill := playerColor(id)
