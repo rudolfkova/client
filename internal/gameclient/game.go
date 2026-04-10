@@ -39,6 +39,10 @@ const (
 
 	chatBubbleDur   = 5 * time.Second
 	chatBubbleRunes = 40
+
+	// Временно: листы ходьбы по id (позже — из данных мира/ECS).
+	demoAnimPlayerMale   int64 = 1
+	demoAnimPlayerFemale int64 = 2
 )
 
 type chatBubble struct {
@@ -70,6 +74,9 @@ type Game struct {
 	lobbyChatID   int64
 
 	chatBubbles map[int64]chatBubble // sender_id == id игрока в игре
+
+	demoWalkPhase   map[int64]float64
+	demoWalkMoving  map[int64]bool
 }
 
 func NewGame(accessToken, refreshToken string, userID int64, lobbyChatID int64, wsChat *websocket.Conn, wsGame *websocket.Conn, wsMsgs <-chan gamekit.Envelope, wsLobbyPush <-chan lobby.SubscribeMessage, lobbyLines []lobby.Line) *Game {
@@ -90,7 +97,9 @@ func NewGame(accessToken, refreshToken string, userID int64, lobbyChatID int64, 
 		lobbyLines:    lobbyLines,
 		lobbyChatSize: 13,
 		lobbyChatID:   lobbyChatID,
-		chatBubbles:   make(map[int64]chatBubble),
+		chatBubbles:    make(map[int64]chatBubble),
+		demoWalkPhase:  make(map[int64]float64),
+		demoWalkMoving: make(map[int64]bool),
 	}
 }
 
@@ -162,6 +171,7 @@ func (g *Game) Update() error {
 				}
 			}
 			g.tickPlayerVis()
+			g.tickDemoWalkAnims()
 			g.pruneChatBubbles()
 			g.tickCamera()
 			return nil
@@ -227,6 +237,38 @@ func (g *Game) pruneChatBubbles() {
 		if now.After(b.until) {
 			delete(g.chatBubbles, id)
 		}
+	}
+}
+
+func (g *Game) tickDemoWalkAnims() {
+	g.tickDemoWalkFor(demoAnimPlayerMale)
+	g.tickDemoWalkFor(demoAnimPlayerFemale)
+}
+
+func (g *Game) tickDemoWalkFor(playerID int64) {
+	pl, ok := g.World.Players[playerID]
+	if !ok {
+		g.demoWalkMoving[playerID] = false
+		g.demoWalkPhase[playerID] = 0
+		return
+	}
+	dt := 1.0 / 60.0
+	if tps := ebiten.ActualTPS(); tps > 1 {
+		dt = 1.0 / tps
+	}
+	vx, vy := float32(pl.X), float32(pl.Y)
+	if v, ok2 := g.visTile[playerID]; ok2 {
+		vx, vy = v.X, v.Y
+	}
+	dxf := float64(vx) - float64(pl.X)
+	dyf := float64(vy) - float64(pl.Y)
+	const eps = 0.018
+	moving := dxf*dxf+dyf*dyf > eps*eps
+	g.demoWalkMoving[playerID] = moving
+	if moving {
+		g.demoWalkPhase[playerID] += dt * 7
+	} else {
+		g.demoWalkPhase[playerID] = 0
 	}
 }
 
@@ -304,21 +346,28 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		cy -= camY
 		fill := playerColor(id)
 
-		vector.DrawFilledCircle(screen, cx, cy, world.PlayerRadius, fill, true)
-		vector.StrokeCircle(screen, cx, cy, world.PlayerRadius, 1.5, color.RGBA{0xff, 0xff, 0xff, 0x90}, true)
-
-		if pl.FaceDX != 0 || pl.FaceDY != 0 {
-			const mark = float32(22)
-			tipX := cx + float32(pl.FaceDX)*mark
-			tipY := cy + float32(pl.FaceDY)*mark
-			card := playeranim.CardinalFromPlayer(pl)
-			arrow := [...]color.RGBA{
-				{0xff, 0xc8, 0x78, 0xee}, // E
-				{0x88, 0xd8, 0xff, 0xee}, // S
-				{0xc8, 0xa8, 0xff, 0xee}, // W
-				{0x98, 0xf0, 0xa8, 0xee}, // N
+		if id == demoAnimPlayerMale && playeranim.Male01Sheet() != nil {
+			scale := float64(world.TileSize) / float64(playeranim.WalkFramePx)
+			playeranim.DrawMale01(screen, cx, cy, playeranim.CardinalFromPlayer(pl), g.demoWalkMoving[id], g.demoWalkPhase[id], scale)
+		} else if id == demoAnimPlayerFemale && playeranim.Female012Sheet() != nil {
+			scale := float64(world.TileSize) / float64(playeranim.WalkFramePx)
+			playeranim.DrawFemale012(screen, cx, cy, playeranim.CardinalFromPlayer(pl), g.demoWalkMoving[id], g.demoWalkPhase[id], scale)
+		} else {
+			vector.DrawFilledCircle(screen, cx, cy, world.PlayerRadius, fill, true)
+			vector.StrokeCircle(screen, cx, cy, world.PlayerRadius, 1.5, color.RGBA{0xff, 0xff, 0xff, 0x90}, true)
+			if pl.FaceDX != 0 || pl.FaceDY != 0 {
+				const mark = float32(22)
+				tipX := cx + float32(pl.FaceDX)*mark
+				tipY := cy + float32(pl.FaceDY)*mark
+				card := playeranim.CardinalFromPlayer(pl)
+				arrow := [...]color.RGBA{
+					{0xff, 0xc8, 0x78, 0xee}, // E
+					{0x88, 0xd8, 0xff, 0xee}, // S
+					{0xc8, 0xa8, 0xff, 0xee}, // W
+					{0x98, 0xf0, 0xa8, 0xee}, // N
+				}
+				vector.StrokeLine(screen, cx, cy, tipX, tipY, 2.5, arrow[card], true)
 			}
-			vector.StrokeLine(screen, cx, cy, tipX, tipY, 2.5, arrow[card], true)
 		}
 
 		tagY := float64(cy) - float64(world.PlayerRadius) - world.LabelAboveGap

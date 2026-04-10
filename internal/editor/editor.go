@@ -49,6 +49,9 @@ type App struct {
 	singleIdx      int
 	paletteScroll  int // вертикаль сетки палитры
 	paletteScrollX int // горизонталь (если сетка шире панели)
+	paletteWidth   int // ширина панели палитры (правая колонка); край — тянуть
+	paletteDrag    bool
+	paletteDragX   int
 	winW, winH     int
 
 	camX, camY float32 // камера: мир сдвигается на экране (px)
@@ -95,6 +98,7 @@ func New(wsGame *websocket.Conn, msgs <-chan gamekit.Envelope) *App {
 		blocks:       true,
 		pickTilesets: true,
 		singleIdx:    0,
+		paletteWidth: paletteMinW,
 		winW:         WindowWidth,
 		winH:         WindowHeight,
 		editLayer:    0,
@@ -292,6 +296,7 @@ func (a *App) nextSet(delta int) {
 		a.setIdx = (a.setIdx + delta + len(a.setNames)) % len(a.setNames)
 		if tiles.TileCountInSet(a.currentSet()) > 0 {
 			a.clampTileIdx()
+			a.clampScroll()
 			return
 		}
 	}
@@ -335,6 +340,25 @@ func (a *App) Update() error {
 
 	mx, my := ebiten.CursorPosition()
 	wx, wy := ebiten.Wheel()
+
+	pxEdge := a.paletteX()
+	if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) && mx >= pxEdge && mx < pxEdge+paletteSplitterW && my >= 0 && my < a.winH {
+		a.paletteDrag = true
+		a.paletteDragX = mx
+	}
+	if !ebiten.IsMouseButtonPressed(ebiten.MouseButtonLeft) {
+		if a.paletteDrag {
+			a.paletteDrag = false
+		}
+	}
+	if a.paletteDrag {
+		d := mx - a.paletteDragX
+		a.paletteDragX = mx
+		a.paletteWidth -= d
+		a.clampPaletteWidth()
+		a.clampScroll()
+	}
+
 	a.handlePaletteScroll(mx, my, wx, wy)
 
 	if inpututil.IsKeyJustPressed(ebiten.KeyF2) {
@@ -542,7 +566,7 @@ func (a *App) Draw(screen *ebiten.Image) {
 
 	a.drawPalette(screen)
 
-	line1 := "Стрелки — камера · Shift+стрелки — палитра · ЛКМ кисть · Ctrl+ЛКМ заливка · ПКМ стереть кистью · Ctrl+ПКМ стереть область · F2 сохранить · , . слой · R поворот"
+	line1 := "Стрелки — камера · Shift+стрелки — палитра · над сеткой: колёсико / Shift+колёсико вбок · ЛКМ кисть · Ctrl+ЛКМ заливка · ПКМ стереть · край палитры — ширина · F2 сохранить · , . слой · R поворот"
 	hudFace := &textv2.GoTextFace{Source: ui.FontSource(), Size: 14}
 	hudOpts := &textv2.DrawOptions{}
 	hudOpts.ColorScale.ScaleWithColor(color.RGBA{0xf0, 0xf0, 0xf0, 0xff})
@@ -613,6 +637,7 @@ func playerColor(id int64) color.RGBA {
 func (a *App) Layout(outsideWidth, outsideHeight int) (int, int) {
 	a.winW = outsideWidth
 	a.winH = outsideHeight
+	a.clampPaletteWidth()
 	a.clampScroll()
 	return outsideWidth, outsideHeight
 }
