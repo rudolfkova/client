@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"image/color"
 	"image/png"
+	"slices"
 	"sync"
 
 	"github.com/hajimehoshi/ebiten/v2"
@@ -25,6 +26,21 @@ var (
 	imgMu   sync.Mutex
 	imgByID = make(map[string]*ebiten.Image)
 )
+
+// ImageForTexture картинка для ключа (тайлсет или grass/water/path); nil если неизвестно.
+func ImageForTexture(name string) *ebiten.Image {
+	return imageForTexture(name)
+}
+
+// EditorSingleTextureKeys отдельные текстуры из assets/tiles (wire-ключи), по алфавиту.
+func EditorSingleTextureKeys() []string {
+	keys := make([]string, 0, len(assetFiles))
+	for k := range assetFiles {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	return keys
+}
 
 func imageForTexture(name string) *ebiten.Image {
 	imgMu.Lock()

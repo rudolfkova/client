@@ -35,6 +35,11 @@ type App struct {
 	setIdx   int
 	tileIdx  int // 0-based внутри набора → на wire Beach_Tile_{tileIdx+1}
 	blocks   bool
+
+	pickTilesets  bool // true: тайлсеты, false: grass/water/path
+	singleIdx     int
+	paletteScroll int
+	winW, winH    int
 }
 
 func New(wsGame *websocket.Conn, msgs <-chan gamekit.Envelope) *App {
@@ -48,13 +53,17 @@ func New(wsGame *websocket.Conn, msgs <-chan gamekit.Envelope) *App {
 		}
 	}
 	return &App{
-		wsGame:   wsGame,
-		msgs:     msgs,
-		World:    state.NewWorld(),
-		setNames: sets,
-		setIdx:   si,
-		tileIdx:  0,
-		blocks:   true,
+		wsGame:       wsGame,
+		msgs:         msgs,
+		World:        state.NewWorld(),
+		setNames:     sets,
+		setIdx:       si,
+		tileIdx:      0,
+		blocks:       true,
+		pickTilesets: true,
+		singleIdx:    0,
+		winW:         WindowWidth,
+		winH:         WindowHeight,
 	}
 }
 
@@ -84,7 +93,29 @@ func (a *App) clampTileIdx() {
 	}
 }
 
+func (a *App) clampSingleIdx() {
+	keys := tiles.EditorSingleTextureKeys()
+	if len(keys) == 0 {
+		a.singleIdx = 0
+		return
+	}
+	if a.singleIdx < 0 {
+		a.singleIdx = 0
+	}
+	if a.singleIdx >= len(keys) {
+		a.singleIdx = len(keys) - 1
+	}
+}
+
 func (a *App) texture() string {
+	if !a.pickTilesets {
+		keys := tiles.EditorSingleTextureKeys()
+		if len(keys) == 0 {
+			return "wall"
+		}
+		a.clampSingleIdx()
+		return keys[a.singleIdx]
+	}
 	n := a.tileCount()
 	if n == 0 {
 		return "wall"
@@ -115,39 +146,58 @@ func (a *App) Update() error {
 			}
 			a.World.ApplyEnvelope(msg)
 		default:
+			mx, my := ebiten.CursorPosition()
+			_, wy := ebiten.Wheel()
+			a.handlePaletteScroll(mx, my, wy)
+
 			if inpututil.IsKeyJustPressed(ebiten.KeySpace) {
 				a.blocks = !a.blocks
 			}
-			if inpututil.IsKeyJustPressed(ebiten.KeyArrowLeft) {
-				n := a.tileCount()
-				if n > 0 {
-					a.tileIdx = (a.tileIdx - 1 + n) % n
+			if a.pickTilesets {
+				if inpututil.IsKeyJustPressed(ebiten.KeyArrowLeft) {
+					n := a.tileCount()
+					if n > 0 {
+						a.tileIdx = (a.tileIdx - 1 + n) % n
+					}
 				}
-			}
-			if inpututil.IsKeyJustPressed(ebiten.KeyArrowRight) {
-				n := a.tileCount()
-				if n > 0 {
-					a.tileIdx = (a.tileIdx + 1) % n
+				if inpututil.IsKeyJustPressed(ebiten.KeyArrowRight) {
+					n := a.tileCount()
+					if n > 0 {
+						a.tileIdx = (a.tileIdx + 1) % n
+					}
 				}
-			}
-			if inpututil.IsKeyJustPressed(ebiten.KeyArrowUp) {
-				a.nextSet(-1)
-			}
-			if inpututil.IsKeyJustPressed(ebiten.KeyArrowDown) {
-				a.nextSet(1)
+				if inpututil.IsKeyJustPressed(ebiten.KeyArrowUp) {
+					a.nextSet(-1)
+					a.paletteScroll = 0
+				}
+				if inpututil.IsKeyJustPressed(ebiten.KeyArrowDown) {
+					a.nextSet(1)
+					a.paletteScroll = 0
+				}
+			} else {
+				keys := tiles.EditorSingleTextureKeys()
+				n := len(keys)
+				if n > 0 {
+					if inpututil.IsKeyJustPressed(ebiten.KeyArrowLeft) || inpututil.IsKeyJustPressed(ebiten.KeyArrowUp) {
+						a.singleIdx = (a.singleIdx - 1 + n) % n
+					}
+					if inpututil.IsKeyJustPressed(ebiten.KeyArrowRight) || inpututil.IsKeyJustPressed(ebiten.KeyArrowDown) {
+						a.singleIdx = (a.singleIdx + 1) % n
+					}
+				}
 			}
 			if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) {
-				mx, my := ebiten.CursorPosition()
-				tx, ty, ok := world.TileFromScreen(mx, my)
-				if ok {
-					intent := gamekit.TileSpawnIntent{
-						X:       tx,
-						Y:       ty,
-						Texture: a.texture(),
-						Blocks:  a.blocks,
-					}
-					if err := gamews.Send(a.wsGame, gamekit.TypeSpawnTile, intent); err != nil {
-						log.Printf("editor spawn_tile: %v", err)
+				if !a.handlePaletteClick(mx, my) {
+					if tx, ty, ok := a.mapTileFromCursor(mx, my); ok {
+						intent := gamekit.TileSpawnIntent{
+							X:       tx,
+							Y:       ty,
+							Texture: a.texture(),
+							Blocks:  a.blocks,
+						}
+						if err := gamews.Send(a.wsGame, gamekit.TypeSpawnTile, intent); err != nil {
+							log.Printf("editor spawn_tile: %v", err)
+						}
 					}
 				}
 			}
@@ -191,17 +241,14 @@ func (a *App) Draw(screen *ebiten.Image) {
 		textv2.Draw(screen, label, face, opts)
 	}
 
-	line1 := "Редактор — ЛКМ: тайл   ↑↓: набор   ←→: тайл в наборе   пробел: коллизия"
-	line2 := fmt.Sprintf("Набор: %s   тайл %d/%d   wire: %q   blocks=%v",
-		a.currentSet(), a.tileIdx+1, max(1, a.tileCount()), a.texture(), a.blocks)
+	a.drawPalette(screen)
+
+	line1 := "ЛКМ на поле — тайл · Пробел — коллизия · Палитра справа: сетка, вкладки, предпросмотр"
 	hudFace := &textv2.GoTextFace{Source: ui.FontSource(), Size: 14}
 	hudOpts := &textv2.DrawOptions{}
 	hudOpts.ColorScale.ScaleWithColor(color.RGBA{0xf0, 0xf0, 0xf0, 0xff})
 	hudOpts.GeoM.Translate(12, 8)
 	textv2.Draw(screen, line1, hudFace, hudOpts)
-	hudOpts.GeoM.Reset()
-	hudOpts.GeoM.Translate(12, 26)
-	textv2.Draw(screen, line2, hudFace, hudOpts)
 }
 
 func playerColor(id int64) color.RGBA {
@@ -211,5 +258,8 @@ func playerColor(id int64) color.RGBA {
 }
 
 func (a *App) Layout(outsideWidth, outsideHeight int) (int, int) {
+	a.winW = outsideWidth
+	a.winH = outsideHeight
+	a.clampScroll()
 	return outsideWidth, outsideHeight
 }
