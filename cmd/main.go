@@ -91,9 +91,10 @@ type Game struct {
 	lobbyDraft    string
 	lobbyFocused  bool
 	lobbyChatSize float64
+	lobbyChatID   int64
 }
 
-func NewGame(accessToken, refreshToken string, userID int64, wsChat *websocket.Conn, wsGame *websocket.Conn, wsMsgs <-chan WSMessage, wsLobbyPush <-chan LobbyChatMessage, lobbyLines []chatLine) *Game {
+func NewGame(accessToken, refreshToken string, userID int64, lobbyChatID int64, wsChat *websocket.Conn, wsGame *websocket.Conn, wsMsgs <-chan WSMessage, wsLobbyPush <-chan LobbyChatMessage, lobbyLines []chatLine) *Game {
 	return &Game{
 		jwt:     accessToken,
 		refresh: refreshToken,
@@ -108,6 +109,7 @@ func NewGame(accessToken, refreshToken string, userID int64, wsChat *websocket.C
 		players:       make(map[int]Player),
 		lobbyLines:    lobbyLines,
 		lobbyChatSize: 13,
+		lobbyChatID:   lobbyChatID,
 	}
 }
 
@@ -123,7 +125,7 @@ func (g *Game) Update() error {
 			if !ok {
 				return fmt.Errorf("lobby websocket closed")
 			}
-			if push.ChatID != lobbyChatID {
+			if push.ChatID != g.lobbyChatID {
 				continue
 			}
 			g.lobbyLines = append(g.lobbyLines, chatLine{id: push.ID, senderID: push.SenderID, text: push.Text})
@@ -248,7 +250,7 @@ func (g *Game) sendLobbyLine() {
 		return
 	}
 	g.lobbyDraft = ""
-	if err := postLobbySend(g.jwt, lobbyChatID, g.userID, text); err != nil {
+	if err := postLobbySend(g.jwt, g.lobbyChatID, g.userID, text); err != nil {
 		log.Printf("lobby send: %v", err)
 	}
 }
@@ -324,10 +326,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("jwt user_id: %v", err)
 	}
-	if err := joinLobbyChat(sess.AccessToken, userID, lobbyChatID); err != nil {
-		log.Fatalf("lobby join: %v", err)
+	lobbyID, err := ensureLobbyChat(sess.AccessToken, userID)
+	if err != nil {
+		log.Fatalf("lobby: %v", err)
 	}
-	lobbyLines, err := fetchLobbyHistory(sess.AccessToken, lobbyChatID)
+	lobbyLines, err := fetchLobbyHistory(sess.AccessToken, lobbyID)
 	if err != nil {
 		log.Printf("lobby history: %v", err)
 		lobbyLines = nil
@@ -355,7 +358,7 @@ func main() {
 	ebiten.SetVsyncEnabled(true)
 	ebiten.SetWindowResizingMode(ebiten.WindowResizingModeEnabled)
 	ebiten.SetWindowSize(width, height)
-	if err := ebiten.RunGame(NewGame(sess.AccessToken, sess.RefreshToken, userID, chatConn, gameConn, gameMsgs, lobbyPush, lobbyLines)); err != nil {
+	if err := ebiten.RunGame(NewGame(sess.AccessToken, sess.RefreshToken, userID, lobbyID, chatConn, gameConn, gameMsgs, lobbyPush, lobbyLines)); err != nil {
 		log.Fatal(err)
 	}
 }
