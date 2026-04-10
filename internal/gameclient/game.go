@@ -18,6 +18,7 @@ import (
 	"client/internal/gamews"
 	"client/internal/lobby"
 	"client/internal/state"
+	"client/internal/tiles"
 	"client/internal/ui"
 	"client/internal/world"
 )
@@ -157,25 +158,16 @@ func hitPlayer() (target int64, damage int) {
 func (g *Game) Draw(screen *ebiten.Image) {
 	screen.Clear()
 
-	tiles := slices.Clone(g.World.Tiles)
-	slices.SortFunc(tiles, func(a, b gamekit.Tile) int {
+	tileList := slices.Clone(g.World.Tiles)
+	slices.SortFunc(tileList, func(a, b gamekit.Tile) int {
 		if a.Y != b.Y {
 			return a.Y - b.Y
 		}
 		return a.X - b.X
 	})
-	half := float32(world.TileSize) * 0.5
-	for _, t := range tiles {
-		cx, cy := world.ToScreen(t.X, t.Y)
-		x0 := cx - half + 1
-		y0 := cy - half + 1
-		var fill color.RGBA
-		if t.Blocks {
-			fill = color.RGBA{0x44, 0x44, 0x55, 0xcc}
-		} else {
-			fill = color.RGBA{0x28, 0x40, 0x30, 0x55}
-		}
-		vector.DrawFilledRect(screen, x0, y0, float32(world.TileSize)-2, float32(world.TileSize)-2, fill, false)
+	// Текстуры из state.Texture: Beach_Tile_N (тайлсеты 16×16) и legacy grass/water/path — см. internal/tiles.
+	for _, t := range tileList {
+		tiles.Draw(screen, t, tiles.DrawOpts{})
 	}
 
 	ids := make([]int64, 0, len(g.World.Players))

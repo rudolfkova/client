@@ -2,5 +2,5 @@ package data
 
 import "embed"
 
-//go:embed assets/*.png
+//go:embed all:assets
 var TileAssets embed.FS

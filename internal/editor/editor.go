@@ -15,6 +15,7 @@ import (
 
 	"client/internal/gamews"
 	"client/internal/state"
+	"client/internal/tiles"
 	"client/internal/ui"
 	"client/internal/world"
 )
@@ -24,34 +25,85 @@ const (
 	WindowHeight = 800
 )
 
-var brushTextures = []string{"wall", "grass", "water", "path"}
-
 // App — клиент редактора мира: spawn_tile по клику, превью состояния с game WS.
 type App struct {
 	wsGame *websocket.Conn
 	msgs   <-chan gamekit.Envelope
 	World  *state.World
 
-	brushIndex int
-	blocks     bool
+	setNames []string
+	setIdx   int
+	tileIdx  int // 0-based внутри набора → на wire Beach_Tile_{tileIdx+1}
+	blocks   bool
 }
 
 func New(wsGame *websocket.Conn, msgs <-chan gamekit.Envelope) *App {
 	_ = ui.FontSource()
+	sets := tiles.EditorTileSets()
+	si := 0
+	for i, s := range sets {
+		if tiles.TileCountInSet(s) > 0 {
+			si = i
+			break
+		}
+	}
 	return &App{
-		wsGame:     wsGame,
-		msgs:       msgs,
-		World:      state.NewWorld(),
-		brushIndex: 0,
-		blocks:     true,
+		wsGame:   wsGame,
+		msgs:     msgs,
+		World:    state.NewWorld(),
+		setNames: sets,
+		setIdx:   si,
+		tileIdx:  0,
+		blocks:   true,
+	}
+}
+
+func (a *App) currentSet() string {
+	if len(a.setNames) == 0 {
+		return ""
+	}
+	a.setIdx = (a.setIdx + len(a.setNames)) % len(a.setNames)
+	return a.setNames[a.setIdx]
+}
+
+func (a *App) tileCount() int {
+	return tiles.TileCountInSet(a.currentSet())
+}
+
+func (a *App) clampTileIdx() {
+	n := a.tileCount()
+	if n <= 0 {
+		a.tileIdx = 0
+		return
+	}
+	if a.tileIdx >= n {
+		a.tileIdx = n - 1
+	}
+	if a.tileIdx < 0 {
+		a.tileIdx = 0
 	}
 }
 
 func (a *App) texture() string {
-	if len(brushTextures) == 0 {
+	n := a.tileCount()
+	if n == 0 {
 		return "wall"
 	}
-	return brushTextures[a.brushIndex%len(brushTextures)]
+	a.clampTileIdx()
+	return tiles.TextureKey(a.currentSet(), a.tileIdx)
+}
+
+func (a *App) nextSet(delta int) {
+	if len(a.setNames) == 0 {
+		return
+	}
+	for k := 0; k < len(a.setNames); k++ {
+		a.setIdx = (a.setIdx + delta + len(a.setNames)) % len(a.setNames)
+		if tiles.TileCountInSet(a.currentSet()) > 0 {
+			a.clampTileIdx()
+			return
+		}
+	}
 }
 
 func (a *App) Update() error {
@@ -63,14 +115,26 @@ func (a *App) Update() error {
 			}
 			a.World.ApplyEnvelope(msg)
 		default:
-			if inpututil.IsKeyJustPressed(ebiten.KeyB) {
+			if inpututil.IsKeyJustPressed(ebiten.KeySpace) {
 				a.blocks = !a.blocks
 			}
-			for i := range brushTextures {
-				key := ebiten.KeyDigit1 + ebiten.Key(i)
-				if inpututil.IsKeyJustPressed(key) {
-					a.brushIndex = i
+			if inpututil.IsKeyJustPressed(ebiten.KeyArrowLeft) {
+				n := a.tileCount()
+				if n > 0 {
+					a.tileIdx = (a.tileIdx - 1 + n) % n
 				}
+			}
+			if inpututil.IsKeyJustPressed(ebiten.KeyArrowRight) {
+				n := a.tileCount()
+				if n > 0 {
+					a.tileIdx = (a.tileIdx + 1) % n
+				}
+			}
+			if inpututil.IsKeyJustPressed(ebiten.KeyArrowUp) {
+				a.nextSet(-1)
+			}
+			if inpututil.IsKeyJustPressed(ebiten.KeyArrowDown) {
+				a.nextSet(1)
 			}
 			if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) {
 				mx, my := ebiten.CursorPosition()
@@ -95,15 +159,15 @@ func (a *App) Update() error {
 func (a *App) Draw(screen *ebiten.Image) {
 	screen.Clear()
 
-	tiles := slices.Clone(a.World.Tiles)
-	slices.SortFunc(tiles, func(x, y gamekit.Tile) int {
+	tileList := slices.Clone(a.World.Tiles)
+	slices.SortFunc(tileList, func(x, y gamekit.Tile) int {
 		if x.Y != y.Y {
 			return x.Y - y.Y
 		}
 		return x.X - y.X
 	})
-	for _, t := range tiles {
-		drawTile(screen, t)
+	for _, t := range tileList {
+		tiles.Draw(screen, t, tiles.DrawOpts{OutlineBlocking: true})
 	}
 
 	ids := make([]int64, 0, len(a.World.Players))
@@ -127,9 +191,9 @@ func (a *App) Draw(screen *ebiten.Image) {
 		textv2.Draw(screen, label, face, opts)
 	}
 
-	line1 := fmt.Sprintf("Редактор — ЛКМ: поставить тайл   1-%d: текстура   B: коллизия %v",
-		len(brushTextures), a.blocks)
-	line2 := fmt.Sprintf("Текущая текстура: %q", a.texture())
+	line1 := "Редактор — ЛКМ: тайл   ↑↓: набор   ←→: тайл в наборе   пробел: коллизия"
+	line2 := fmt.Sprintf("Набор: %s   тайл %d/%d   wire: %q   blocks=%v",
+		a.currentSet(), a.tileIdx+1, max(1, a.tileCount()), a.texture(), a.blocks)
 	hudFace := &textv2.GoTextFace{Source: ui.FontSource(), Size: 14}
 	hudOpts := &textv2.DrawOptions{}
 	hudOpts.ColorScale.ScaleWithColor(color.RGBA{0xf0, 0xf0, 0xf0, 0xff})

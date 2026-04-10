@@ -12,6 +12,8 @@ import (
 	"client/internal/gameclient"
 	"client/internal/lobby"
 	"client/internal/ws"
+
+	_ "client/internal/tiles" // init: нарезка тайлсетов + те же текстуры, что в редакторе
 )
 
 func main() {
