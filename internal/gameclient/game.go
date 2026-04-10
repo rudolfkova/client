@@ -1,0 +1,273 @@
+package gameclient
+
+import (
+	"fmt"
+	"image/color"
+	"log"
+	"slices"
+	"strings"
+	"unicode/utf8"
+
+	"github.com/gorilla/websocket"
+	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/hajimehoshi/ebiten/v2/inpututil"
+	textv2 "github.com/hajimehoshi/ebiten/v2/text/v2"
+	"github.com/hajimehoshi/ebiten/v2/vector"
+	"github.com/rudolfkova/grpc_auth/pkg/gamekit"
+
+	"client/internal/gamews"
+	"client/internal/lobby"
+	"client/internal/state"
+	"client/internal/ui"
+	"client/internal/world"
+)
+
+const (
+	WindowWidth  = 1600
+	WindowHeight = 800
+)
+
+type Game struct {
+	jwt     string
+	refresh string
+	userID  int64
+
+	wsGame *websocket.Conn
+	wsChat *websocket.Conn
+
+	wsMsgs      <-chan gamekit.Envelope
+	wsLobbyPush <-chan lobby.SubscribeMessage
+
+	World *state.World
+
+	lastMoveDx, lastMoveDy int
+
+	lobbyLines    []lobby.Line
+	lobbyDraft    string
+	lobbyFocused  bool
+	lobbyChatSize float64
+	lobbyChatID   int64
+}
+
+func NewGame(accessToken, refreshToken string, userID int64, lobbyChatID int64, wsChat *websocket.Conn, wsGame *websocket.Conn, wsMsgs <-chan gamekit.Envelope, wsLobbyPush <-chan lobby.SubscribeMessage, lobbyLines []lobby.Line) *Game {
+	_ = ui.FontSource()
+	return &Game{
+		jwt:     accessToken,
+		refresh: refreshToken,
+		userID:  userID,
+
+		wsGame: wsGame,
+		wsChat: wsChat,
+
+		wsMsgs:      wsMsgs,
+		wsLobbyPush: wsLobbyPush,
+
+		World:         state.NewWorld(),
+		lobbyLines:    lobbyLines,
+		lobbyChatSize: 13,
+		lobbyChatID:   lobbyChatID,
+	}
+}
+
+func (g *Game) Update() error {
+	for {
+		select {
+		case msg, ok := <-g.wsMsgs:
+			if !ok {
+				return fmt.Errorf("websocket closed")
+			}
+			g.World.ApplyEnvelope(msg)
+		case push, ok := <-g.wsLobbyPush:
+			if !ok {
+				return fmt.Errorf("lobby websocket closed")
+			}
+			if push.ChatID != g.lobbyChatID {
+				continue
+			}
+			g.lobbyLines = append(g.lobbyLines, lobby.Line{ID: push.ID, SenderID: push.SenderID, Text: push.Text})
+			if len(g.lobbyLines) > lobby.MaxChatLines {
+				g.lobbyLines = g.lobbyLines[len(g.lobbyLines)-lobby.MaxChatLines:]
+			}
+		default:
+			if inpututil.IsKeyJustPressed(ebiten.KeyTab) {
+				g.lobbyFocused = !g.lobbyFocused
+			}
+			if g.lobbyFocused && ebiten.IsFocused() {
+				for _, ch := range ebiten.AppendInputChars(nil) {
+					if ch == '\n' || ch == '\r' {
+						continue
+					}
+					if utf8.RuneCountInString(g.lobbyDraft) >= lobby.MaxDraftRunes {
+						break
+					}
+					g.lobbyDraft += string(ch)
+				}
+				if inpututil.IsKeyJustPressed(ebiten.KeyBackspace) && g.lobbyDraft != "" {
+					_, sz := utf8.DecodeLastRuneInString(g.lobbyDraft)
+					g.lobbyDraft = g.lobbyDraft[:len(g.lobbyDraft)-sz]
+				}
+				if inpututil.IsKeyJustPressed(ebiten.KeyEnter) {
+					g.sendLobbyLine()
+				}
+				return nil
+			}
+			dx, dy := arrowDirection()
+			if dx != g.lastMoveDx || dy != g.lastMoveDy {
+				g.lastMoveDx, g.lastMoveDy = dx, dy
+				if err := gamews.Send(g.wsGame, gamekit.TypeMove, gamekit.MoveIntent{DX: dx, DY: dy}); err != nil {
+					log.Printf("ws write: %v", err)
+					return err
+				}
+			}
+			target, damage := hitPlayer()
+			if err := gamews.Send(g.wsGame, gamekit.TypeHit, gamekit.HitIntent{TargetID: target, Damage: damage}); err != nil {
+				log.Printf("ws write: %v", err)
+				return err
+			}
+
+			return nil
+		}
+	}
+}
+
+func arrowDirection() (dx, dy int) {
+	if ebiten.IsKeyPressed(ebiten.KeyArrowLeft) {
+		dx--
+	}
+	if ebiten.IsKeyPressed(ebiten.KeyArrowRight) {
+		dx++
+	}
+	if ebiten.IsKeyPressed(ebiten.KeyArrowUp) {
+		dy--
+	}
+	if ebiten.IsKeyPressed(ebiten.KeyArrowDown) {
+		dy++
+	}
+	return dx, dy
+}
+
+func hitPlayer() (target int64, damage int) {
+	if ebiten.IsKeyPressed(ebiten.KeySpace) {
+		damage = 1
+		target = 4
+	}
+	return target, damage
+}
+
+func (g *Game) Draw(screen *ebiten.Image) {
+	screen.Clear()
+
+	tiles := slices.Clone(g.World.Tiles)
+	slices.SortFunc(tiles, func(a, b gamekit.Tile) int {
+		if a.Y != b.Y {
+			return a.Y - b.Y
+		}
+		return a.X - b.X
+	})
+	half := float32(world.TileSize) * 0.5
+	for _, t := range tiles {
+		cx, cy := world.ToScreen(t.X, t.Y)
+		x0 := cx - half + 1
+		y0 := cy - half + 1
+		var fill color.RGBA
+		if t.Blocks {
+			fill = color.RGBA{0x44, 0x44, 0x55, 0xcc}
+		} else {
+			fill = color.RGBA{0x28, 0x40, 0x30, 0x55}
+		}
+		vector.DrawFilledRect(screen, x0, y0, float32(world.TileSize)-2, float32(world.TileSize)-2, fill, false)
+	}
+
+	ids := make([]int64, 0, len(g.World.Players))
+	for id := range g.World.Players {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+
+	face := &textv2.GoTextFace{
+		Source: ui.FontSource(),
+		Size:   world.LabelTextSize,
+	}
+
+	for _, id := range ids {
+		pl := g.World.Players[id]
+		cx, cy := world.ToScreen(pl.X, pl.Y)
+		fill := playerColor(id)
+
+		vector.DrawFilledCircle(screen, cx, cy, world.PlayerRadius, fill, true)
+		vector.StrokeCircle(screen, cx, cy, world.PlayerRadius, 1.5, color.RGBA{0xff, 0xff, 0xff, 0x90}, true)
+
+		label := fmt.Sprintf("%d", pl.HP)
+		opts := &textv2.DrawOptions{}
+		opts.PrimaryAlign = textv2.AlignCenter
+		opts.SecondaryAlign = textv2.AlignEnd
+		opts.GeoM.Translate(float64(cx), float64(cy)-world.PlayerRadius-world.LabelAboveGap)
+		opts.ColorScale.ScaleWithColor(color.RGBA{0xff, 0xff, 0xff, 0xff})
+		textv2.Draw(screen, label, face, opts)
+	}
+	g.drawLobbyChat(screen)
+}
+
+func playerColor(id int64) color.RGBA {
+	ii := int(id)
+	h := uint8(37*ii + 80)
+	return color.RGBA{R: h, G: uint8(200 - (ii*17)%80), B: uint8(120 + (ii*13)%100), A: 0xff}
+}
+
+func (g *Game) sendLobbyLine() {
+	text := strings.TrimSpace(g.lobbyDraft)
+	if text == "" {
+		return
+	}
+	g.lobbyDraft = ""
+	if err := lobby.SendLine(g.jwt, g.lobbyChatID, g.userID, text); err != nil {
+		log.Printf("lobby send: %v", err)
+	}
+}
+
+func (g *Game) drawLobbyChat(screen *ebiten.Image) {
+	w, _ := ebiten.WindowSize()
+	const panelW float32 = 400
+	panelH := float32(WindowHeight) * 0.42
+	x := float32(w) - panelW - 14
+	y := float32(14)
+	vector.DrawFilledRect(screen, x, y, panelW, panelH, color.RGBA{0x18, 0x18, 0x22, 0xd8}, false)
+	vector.StrokeRect(screen, x, y, panelW, panelH, 1, color.RGBA{0x66, 0x66, 0x77, 0xff}, false)
+
+	titleFace := &textv2.GoTextFace{Source: ui.FontSource(), Size: 14}
+	titleOpts := &textv2.DrawOptions{}
+	titleOpts.GeoM.Translate(float64(x+10), float64(y+6))
+	titleOpts.ColorScale.ScaleWithColor(color.RGBA{0xff, 0xff, 0xff, 0xff})
+	textv2.Draw(screen, "Лобби", titleFace, titleOpts)
+
+	face := &textv2.GoTextFace{Source: ui.FontSource(), Size: g.lobbyChatSize}
+	lineStep := float32(g.lobbyChatSize + 3)
+	lineY := y + panelH - lineStep - 10
+	hint := "Tab — фокус чата"
+	if g.lobbyFocused {
+		hint = "> " + g.lobbyDraft
+	}
+	inOpts := &textv2.DrawOptions{}
+	inOpts.GeoM.Translate(float64(x+8), float64(lineY))
+	inOpts.ColorScale.ScaleWithColor(color.RGBA{0xaa, 0xd5, 0xff, 0xff})
+	textv2.Draw(screen, hint, face, inOpts)
+	lineY -= lineStep + 6
+	msgOpts := &textv2.DrawOptions{}
+	msgOpts.ColorScale.ScaleWithColor(color.RGBA{0xcc, 0xcc, 0xcc, 0xff})
+	for i := len(g.lobbyLines) - 1; i >= 0 && lineY > y+36; i-- {
+		ln := g.lobbyLines[i]
+		s := fmt.Sprintf("[%d] %s", ln.SenderID, ln.Text)
+		const maxRunes = 52
+		if utf8.RuneCountInString(s) > maxRunes {
+			s = string([]rune(s)[:maxRunes]) + "…"
+		}
+		msgOpts.GeoM.Reset()
+		msgOpts.GeoM.Translate(float64(x+8), float64(lineY))
+		textv2.Draw(screen, s, face, msgOpts)
+		lineY -= lineStep
+	}
+}
+
+func (g *Game) Layout(outsideWidth, outsideHeight int) (int, int) {
+	return outsideWidth, outsideHeight
+}

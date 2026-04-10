@@ -1,4 +1,4 @@
-package main
+package auth
 
 import (
 	"bytes"
@@ -8,31 +8,28 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"client/internal/config"
 )
 
-const (
-	serverAddr  = "localhost:8080"
-	authBaseURL = "http://" + serverAddr
-)
-
-type loginRequest struct {
+type LoginRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
 }
 
-type loginResponse struct {
+type LoginResponse struct {
 	AccessToken      string    `json:"access_token"`
 	RefreshToken     string    `json:"refresh_token"`
 	AccessExpiresAt  time.Time `json:"access_expires_at"`
 	RefreshExpiresAt time.Time `json:"refresh_expires_at"`
 }
 
-func login(email, password string) (*loginResponse, error) {
-	body, err := json.Marshal(loginRequest{Email: email, Password: password})
+func Login(email, password string) (*LoginResponse, error) {
+	body, err := json.Marshal(LoginRequest{Email: email, Password: password})
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequest(http.MethodPost, authBaseURL+"/auth/login", bytes.NewReader(body))
+	req, err := http.NewRequest(http.MethodPost, config.HTTPBase()+"/auth/login", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -52,7 +49,7 @@ func login(email, password string) (*loginResponse, error) {
 		return nil, fmt.Errorf("login failed: %s — %s", resp.Status, strings.TrimSpace(string(raw)))
 	}
 
-	var out loginResponse
+	var out LoginResponse
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return nil, err
 	}

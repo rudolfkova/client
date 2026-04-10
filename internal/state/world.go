@@ -1,27 +1,43 @@
-package main
+package state
 
 import (
 	"encoding/json"
 	"log"
+	"slices"
+
+	"github.com/rudolfkova/grpc_auth/pkg/gamekit"
 )
 
-func (g *Game) handleWSMessage(msg WSMessage) {
-	if msg.Service != wsServiceGame {
+// World — последний снимок из gamekit.TypeState.
+type World struct {
+	Players map[int64]gamekit.Player
+	Tiles   []gamekit.Tile
+}
+
+func NewWorld() *World {
+	return &World{
+		Players: make(map[int64]gamekit.Player),
+	}
+}
+
+func (w *World) ApplyEnvelope(msg gamekit.Envelope) {
+	if msg.Service != gamekit.ServiceGame {
 		return
 	}
 	switch msg.Type {
-	case wsTypeState:
-		var p gameStatePayload
+	case gamekit.TypeState:
+		var p gamekit.StatePayload
 		if err := json.Unmarshal(msg.Payload, &p); err != nil {
 			log.Printf("ws: game state payload: %v", err)
 			return
 		}
-		next := make(map[int]Player, len(p.Players))
+		next := make(map[int64]gamekit.Player, len(p.Players))
 		for _, pl := range p.Players {
 			next[pl.ID] = pl
 		}
-		g.players = next
-	case wsTypeReject:
+		w.Players = next
+		w.Tiles = slices.Clone(p.Tiles)
+	case gamekit.TypeReject:
 		var p struct {
 			Reason         string `json:"reason"`
 			Message        string `json:"message"`
@@ -34,7 +50,7 @@ func (g *Game) handleWSMessage(msg WSMessage) {
 		}
 		log.Printf("ws: request rejected reason=%q message=%q request_type=%q request_service=%q",
 			p.Reason, p.Message, p.RequestType, p.RequestService)
-	case wsTypeError:
+	case gamekit.TypeError:
 		var p struct {
 			Message string `json:"message"`
 		}
@@ -44,6 +60,5 @@ func (g *Game) handleWSMessage(msg WSMessage) {
 		}
 		log.Printf("ws: server error message=%q", p.Message)
 	default:
-		// другие type — по мере появления
 	}
 }
