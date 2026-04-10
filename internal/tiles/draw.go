@@ -108,8 +108,33 @@ func Draw(screen *ebiten.Image, t gamekit.Tile, opts DrawOpts) {
 	}
 }
 
+// DrawGhost полупрозрачный тайл (курсор в редакторе).
+func DrawGhost(screen *ebiten.Image, tx, ty int, texture string, rotationQuarter int, blocks bool, opts DrawOpts, alpha float32) {
+	x0 := float32(world.GridPad) + float32(tx)*float32(world.TileSize) - opts.CamX
+	y0 := float32(world.GridPad) + float32(ty)*float32(world.TileSize) - opts.CamY
+	ts := float32(world.TileSize)
+	a8 := uint8(min(255, int(256*alpha)))
+	img := imageForTexture(texture)
+	if img != nil {
+		drawTextureScaledRotatedAlpha(screen, img, x0+ts/2, y0+ts/2, ts, rotationQuarter, alpha)
+	} else {
+		fill := color.RGBA{0x44, 0x44, 0x55, a8}
+		if !blocks {
+			fill = color.RGBA{0x28, 0x50, 0x38, a8}
+		}
+		vector.DrawFilledRect(screen, x0, y0, ts, ts, fill, false)
+	}
+	if opts.OutlineBlocking && blocks {
+		vector.StrokeRect(screen, x0, y0, ts, ts, 2, color.RGBA{0xe0, 0x30, 0x30, a8}, false)
+	}
+}
+
 // DrawTextureScaledRotated — центр (cx, cy), сторона квадрата size, четверти по часовой (как на сервере).
 func DrawTextureScaledRotated(dst *ebiten.Image, img *ebiten.Image, cx, cy, size float32, rotationQuarter int) {
+	drawTextureScaledRotatedAlpha(dst, img, cx, cy, size, rotationQuarter, 1)
+}
+
+func drawTextureScaledRotatedAlpha(dst *ebiten.Image, img *ebiten.Image, cx, cy, size float32, rotationQuarter int, alpha float32) {
 	if img == nil {
 		return
 	}
@@ -119,6 +144,7 @@ func DrawTextureScaledRotated(dst *ebiten.Image, img *ebiten.Image, cx, cy, size
 	}
 	q := NormalizeRotationQuarter(rotationQuarter)
 	op := &ebiten.DrawImageOptions{}
+	op.ColorScale.Scale(1, 1, 1, alpha)
 	sx := float64(size) / float64(w)
 	sy := float64(size) / float64(h)
 	op.GeoM.Translate(-float64(w)/2, -float64(h)/2)

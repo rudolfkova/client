@@ -61,6 +61,12 @@ type App struct {
 	saveToast         string
 	saveToastBad      bool // true — ошибка (другой цвет)
 	saveToastDeadline time.Time
+
+	paintNX, paintNY int
+	paintHave        bool
+	rectDrag         bool
+	rectX0, rectY0   int
+	rectX1, rectY1   int
 }
 
 func New(wsGame *websocket.Conn, msgs <-chan gamekit.Envelope) *App {
@@ -108,6 +114,47 @@ func (a *App) stepRotation(delta int) {
 
 func (a *App) shiftPaletteKeys() bool {
 	return ebiten.IsKeyPressed(ebiten.KeyShiftLeft) || ebiten.IsKeyPressed(ebiten.KeyShiftRight)
+}
+
+func (a *App) ctrlHeld() bool {
+	return ebiten.IsKeyPressed(ebiten.KeyControlLeft) || ebiten.IsKeyPressed(ebiten.KeyControlRight)
+}
+
+func (a *App) sendSpawn(tx, ty int) {
+	intent := gamekit.TileSpawnIntent{
+		X:        tx,
+		Y:        ty,
+		Layer:    a.editLayer,
+		Rotation: tiles.NormalizeRotationQuarter(a.editRotation),
+		Texture:  a.texture(),
+		Blocks:   a.blocks,
+	}
+	if err := gamews.Send(a.wsGame, gamekit.TypeSpawnTile, intent); err != nil {
+		log.Printf("editor spawn_tile: %v", err)
+	}
+}
+
+func (a *App) fillSpawnRect(x0, y0, x1, y1 int) {
+	xa, xb := min(x0, x1), max(x0, x1)
+	ya, yb := min(y0, y1), max(y0, y1)
+	for y := ya; y <= yb; y++ {
+		for x := xa; x <= xb; x++ {
+			a.sendSpawn(x, y)
+		}
+	}
+}
+
+func (a *App) drawRectSel(screen *ebiten.Image) {
+	xa, xb := min(a.rectX0, a.rectX1), max(a.rectX0, a.rectX1)
+	ya, yb := min(a.rectY0, a.rectY1), max(a.rectY0, a.rectY1)
+	ts := float32(world.TileSize)
+	gp := float32(world.GridPad)
+	fx := gp + float32(xa)*ts - a.camX
+	fy := gp + float32(ya)*ts - a.camY
+	fw := float32(xb-xa+1) * ts
+	fh := float32(yb-ya+1) * ts
+	vector.DrawFilledRect(screen, fx, fy, fw, fh, color.RGBA{0x50, 0xa8, 0xf8, 0x22}, false)
+	vector.StrokeRect(screen, fx, fy, fw, fh, 2, color.RGBA{0x88, 0xd0, 0xff, 0xcc}, false)
 }
 
 func (a *App) currentSet() string {
@@ -330,19 +377,42 @@ func (a *App) Update() error {
 			}
 		}
 	}
+	ctrl := a.ctrlHeld()
+	inPal := a.inPalette(mx, my)
+
+	if inpututil.IsMouseButtonJustReleased(ebiten.MouseButtonLeft) {
+		if a.rectDrag {
+			a.fillSpawnRect(a.rectX0, a.rectY0, a.rectX1, a.rectY1)
+			a.rectDrag = false
+		}
+		a.paintHave = false
+	}
+
 	if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) {
 		if !a.handlePaletteClick(mx, my) {
 			if tx, ty, ok := a.mapTileFromCursor(mx, my); ok {
-				intent := gamekit.TileSpawnIntent{
-					X:        tx,
-					Y:        ty,
-					Layer:    a.editLayer,
-					Rotation: tiles.NormalizeRotationQuarter(a.editRotation),
-					Texture:  a.texture(),
-					Blocks:   a.blocks,
+				if ctrl {
+					a.rectDrag = true
+					a.rectX0, a.rectY0 = tx, ty
+					a.rectX1, a.rectY1 = tx, ty
+				} else {
+					a.sendSpawn(tx, ty)
+					a.paintHave = true
+					a.paintNX, a.paintNY = tx, ty
 				}
-				if err := gamews.Send(a.wsGame, gamekit.TypeSpawnTile, intent); err != nil {
-					log.Printf("editor spawn_tile: %v", err)
+			}
+		}
+	}
+	if ebiten.IsMouseButtonPressed(ebiten.MouseButtonLeft) && !inPal {
+		if tx, ty, ok := a.mapTileFromCursor(mx, my); ok {
+			if ctrl {
+				if a.rectDrag {
+					a.rectX1, a.rectY1 = tx, ty
+				}
+			} else if a.paintHave {
+				if tx != a.paintNX || ty != a.paintNY {
+					a.sendSpawn(tx, ty)
+					a.paintNX, a.paintNY = tx, ty
 				}
 			}
 		}
@@ -378,6 +448,22 @@ func (a *App) Draw(screen *ebiten.Image) {
 		tiles.Draw(screen, t, camOpts)
 	}
 
+	if !a.savePanelOpen {
+		cmx, cmy := ebiten.CursorPosition()
+		if !a.inPalette(cmx, cmy) {
+			if a.rectDrag {
+				a.drawRectSel(screen)
+			}
+			if tx, ty, ok := a.mapTileFromCursor(cmx, cmy); ok {
+				ga := float32(0.45)
+				if a.rectDrag {
+					ga = 0.38
+				}
+				tiles.DrawGhost(screen, tx, ty, a.texture(), a.editRotation, a.blocks, camOpts, ga)
+			}
+		}
+	}
+
 	ids := make([]int64, 0, len(a.World.Players))
 	for id := range a.World.Players {
 		ids = append(ids, id)
@@ -403,7 +489,7 @@ func (a *App) Draw(screen *ebiten.Image) {
 
 	a.drawPalette(screen)
 
-	line1 := "Стрелки — камера · Shift+стрелки — палитра · ЛКМ/ПКМ тайл · F2 сохранить · , . слой · R поворот"
+	line1 := "Стрелки — камера · Shift+стрелки — палитра · ЛКМ кисть · Ctrl+ЛКМ прямоугольник (отпустить) · ПКМ стереть · F2 сохранить · , . слой · R поворот"
 	hudFace := &textv2.GoTextFace{Source: ui.FontSource(), Size: 14}
 	hudOpts := &textv2.DrawOptions{}
 	hudOpts.ColorScale.ScaleWithColor(color.RGBA{0xf0, 0xf0, 0xf0, 0xff})
