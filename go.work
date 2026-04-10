@@ -1,0 +1,6 @@
+go 1.26.2
+
+use (
+	.
+	/home/grach/dnd/grpc_auth/pkg/gamekit
+)

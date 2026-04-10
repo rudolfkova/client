@@ -1,10 +1,14 @@
 package editor
 
 import (
+	"encoding/json"
 	"fmt"
 	"image/color"
 	"log"
 	"slices"
+	"strings"
+	"time"
+	"unicode/utf8"
 
 	"github.com/gorilla/websocket"
 	"github.com/hajimehoshi/ebiten/v2"
@@ -24,7 +28,9 @@ const (
 	WindowWidth  = 1600
 	WindowHeight = 800
 
-	maxEditLayer = 31
+	maxEditLayer     = 31
+	maxSaveNameRunes = 120
+	saveToastDur     = 7 * time.Second
 )
 
 // App — клиент редактора мира: spawn_tile по клику, превью состояния с game WS.
@@ -38,14 +44,20 @@ type App struct {
 	tileIdx  int // 0-based внутри набора → на wire Beach_Tile_{tileIdx+1}
 	blocks   bool
 
-	pickTilesets  bool // true: тайлсеты из assets/tileSets, false: корневые PNG в assets/
-	singleIdx       int
-	paletteScroll   int // вертикаль сетки палитры
-	paletteScrollX  int // горизонталь (если сетка шире панели)
-	winW, winH      int
+	pickTilesets   bool // true: тайлсеты из assets/tileSets, false: корневые PNG в assets/
+	singleIdx      int
+	paletteScroll  int // вертикаль сетки палитры
+	paletteScrollX int // горизонталь (если сетка шире панели)
+	winW, winH     int
 
 	editLayer    int // слой spawn_tile / clear_tile
 	editRotation int // четверти по часовой, 0..3
+
+	savePanelOpen     bool
+	saveNameDraft     string
+	saveToast         string
+	saveToastBad      bool // true — ошибка (другой цвет)
+	saveToastDeadline time.Time
 }
 
 func New(wsGame *websocket.Conn, msgs <-chan gamekit.Envelope) *App {
@@ -148,6 +160,53 @@ func (a *App) texture() string {
 	return tiles.TextureKey(a.currentSet(), a.tileIdx)
 }
 
+func (a *App) drainWebSocket() error {
+	for {
+		select {
+		case msg, ok := <-a.msgs:
+			if !ok {
+				return fmt.Errorf("websocket closed")
+			}
+			if msg.Service == gamekit.ServiceGame && msg.Type == gamekit.TypeSaveWorldResult {
+				var p gamekit.SaveWorldResultPayload
+				if err := json.Unmarshal(msg.Payload, &p); err != nil {
+					log.Printf("editor save_world_result: %v", err)
+					continue
+				}
+				if p.Ok {
+					a.saveToastBad = false
+					a.saveToast = fmt.Sprintf("Сохранено: «%s» · v%d · %s", p.Name, p.Version, p.WorldID)
+				} else {
+					a.saveToastBad = true
+					a.saveToast = fmt.Sprintf("%s — %s", p.Code, p.Message)
+				}
+				a.saveToastDeadline = time.Now().Add(saveToastDur)
+				a.savePanelOpen = false
+				continue
+			}
+			a.World.ApplyEnvelope(msg)
+		default:
+			return nil
+		}
+	}
+}
+
+func (a *App) trySaveWorld() {
+	name := strings.TrimSpace(a.saveNameDraft)
+	if name == "" {
+		a.saveToastBad = true
+		a.saveToast = "Укажите имя мира (не пустое)"
+		a.saveToastDeadline = time.Now().Add(4 * time.Second)
+		return
+	}
+	if err := gamews.Send(a.wsGame, gamekit.TypeSaveWorld, gamekit.SaveWorldIntent{Name: name}); err != nil {
+		log.Printf("editor save_world: %v", err)
+		a.saveToastBad = true
+		a.saveToast = fmt.Sprintf("Ошибка отправки: %v", err)
+		a.saveToastDeadline = time.Now().Add(saveToastDur)
+	}
+}
+
 func (a *App) nextSet(delta int) {
 	if len(a.setNames) == 0 {
 		return
@@ -162,94 +221,123 @@ func (a *App) nextSet(delta int) {
 }
 
 func (a *App) Update() error {
-	for {
-		select {
-		case msg, ok := <-a.msgs:
-			if !ok {
-				return fmt.Errorf("websocket closed")
-			}
-			a.World.ApplyEnvelope(msg)
-		default:
-			mx, my := ebiten.CursorPosition()
-			wx, wy := ebiten.Wheel()
-			a.handlePaletteScroll(mx, my, wx, wy)
+	if err := a.drainWebSocket(); err != nil {
+		return err
+	}
+	if a.saveToast != "" && !a.saveToastDeadline.IsZero() && time.Now().After(a.saveToastDeadline) {
+		a.saveToast = ""
+	}
 
-			if inpututil.IsKeyJustPressed(ebiten.KeyComma) {
-				a.decLayer()
+	if a.savePanelOpen {
+		if inpututil.IsKeyJustPressed(ebiten.KeyF2) {
+			a.savePanelOpen = false
+		}
+		if inpututil.IsKeyJustPressed(ebiten.KeyEscape) {
+			a.savePanelOpen = false
+		}
+		if inpututil.IsKeyJustPressed(ebiten.KeyEnter) {
+			a.trySaveWorld()
+		}
+		if ebiten.IsFocused() {
+			for _, ch := range ebiten.AppendInputChars(nil) {
+				if ch == '\n' || ch == '\r' {
+					continue
+				}
+				if utf8.RuneCountInString(a.saveNameDraft) >= maxSaveNameRunes {
+					break
+				}
+				a.saveNameDraft += string(ch)
 			}
-			if inpututil.IsKeyJustPressed(ebiten.KeyPeriod) {
-				a.incLayer()
+			if inpututil.IsKeyJustPressed(ebiten.KeyBackspace) && a.saveNameDraft != "" {
+				_, sz := utf8.DecodeLastRuneInString(a.saveNameDraft)
+				a.saveNameDraft = a.saveNameDraft[:len(a.saveNameDraft)-sz]
 			}
-			if inpututil.IsKeyJustPressed(ebiten.KeyR) {
-				a.stepRotation(1)
-			}
+		}
+		return nil
+	}
 
-			if inpututil.IsKeyJustPressed(ebiten.KeySpace) {
-				a.blocks = !a.blocks
+	mx, my := ebiten.CursorPosition()
+	wx, wy := ebiten.Wheel()
+	a.handlePaletteScroll(mx, my, wx, wy)
+
+	if inpututil.IsKeyJustPressed(ebiten.KeyF2) {
+		a.savePanelOpen = true
+	}
+
+	if inpututil.IsKeyJustPressed(ebiten.KeyComma) {
+		a.decLayer()
+	}
+	if inpututil.IsKeyJustPressed(ebiten.KeyPeriod) {
+		a.incLayer()
+	}
+	if inpututil.IsKeyJustPressed(ebiten.KeyR) {
+		a.stepRotation(1)
+	}
+
+	if inpututil.IsKeyJustPressed(ebiten.KeySpace) {
+		a.blocks = !a.blocks
+	}
+	if a.pickTilesets {
+		if inpututil.IsKeyJustPressed(ebiten.KeyArrowLeft) {
+			n := a.tileCount()
+			if n > 0 {
+				a.tileIdx = (a.tileIdx - 1 + n) % n
 			}
-			if a.pickTilesets {
-				if inpututil.IsKeyJustPressed(ebiten.KeyArrowLeft) {
-					n := a.tileCount()
-					if n > 0 {
-						a.tileIdx = (a.tileIdx - 1 + n) % n
-					}
-				}
-				if inpututil.IsKeyJustPressed(ebiten.KeyArrowRight) {
-					n := a.tileCount()
-					if n > 0 {
-						a.tileIdx = (a.tileIdx + 1) % n
-					}
-				}
-				if inpututil.IsKeyJustPressed(ebiten.KeyArrowUp) {
-					a.nextSet(-1)
-					a.paletteScroll, a.paletteScrollX = 0, 0
-				}
-				if inpututil.IsKeyJustPressed(ebiten.KeyArrowDown) {
-					a.nextSet(1)
-					a.paletteScroll, a.paletteScrollX = 0, 0
-				}
-			} else {
-				keys := tiles.EditorSingleTextureKeys()
-				n := len(keys)
-				if n > 0 {
-					if inpututil.IsKeyJustPressed(ebiten.KeyArrowLeft) || inpututil.IsKeyJustPressed(ebiten.KeyArrowUp) {
-						a.singleIdx = (a.singleIdx - 1 + n) % n
-					}
-					if inpututil.IsKeyJustPressed(ebiten.KeyArrowRight) || inpututil.IsKeyJustPressed(ebiten.KeyArrowDown) {
-						a.singleIdx = (a.singleIdx + 1) % n
-					}
-				}
+		}
+		if inpututil.IsKeyJustPressed(ebiten.KeyArrowRight) {
+			n := a.tileCount()
+			if n > 0 {
+				a.tileIdx = (a.tileIdx + 1) % n
 			}
-			if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) {
-				if !a.handlePaletteClick(mx, my) {
-					if tx, ty, ok := a.mapTileFromCursor(mx, my); ok {
-						intent := gamekit.TileSpawnIntent{
-							X:        tx,
-							Y:        ty,
-							Layer:    a.editLayer,
-							Rotation: tiles.NormalizeRotationQuarter(a.editRotation),
-							Texture:  a.texture(),
-							Blocks:   a.blocks,
-						}
-						if err := gamews.Send(a.wsGame, gamekit.TypeSpawnTile, intent); err != nil {
-							log.Printf("editor spawn_tile: %v", err)
-						}
-					}
-				}
+		}
+		if inpututil.IsKeyJustPressed(ebiten.KeyArrowUp) {
+			a.nextSet(-1)
+			a.paletteScroll, a.paletteScrollX = 0, 0
+		}
+		if inpututil.IsKeyJustPressed(ebiten.KeyArrowDown) {
+			a.nextSet(1)
+			a.paletteScroll, a.paletteScrollX = 0, 0
+		}
+	} else {
+		keys := tiles.EditorSingleTextureKeys()
+		n := len(keys)
+		if n > 0 {
+			if inpututil.IsKeyJustPressed(ebiten.KeyArrowLeft) || inpututil.IsKeyJustPressed(ebiten.KeyArrowUp) {
+				a.singleIdx = (a.singleIdx - 1 + n) % n
 			}
-			if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonRight) {
-				if !a.inPalette(mx, my) {
-					if tx, ty, ok := a.mapTileFromCursor(mx, my); ok {
-						cl := gamekit.TileClearIntent{X: tx, Y: ty, Layer: a.editLayer}
-						if err := gamews.Send(a.wsGame, gamekit.TypeClearTile, cl); err != nil {
-							log.Printf("editor clear_tile: %v", err)
-						}
-					}
-				}
+			if inpututil.IsKeyJustPressed(ebiten.KeyArrowRight) || inpututil.IsKeyJustPressed(ebiten.KeyArrowDown) {
+				a.singleIdx = (a.singleIdx + 1) % n
 			}
-			return nil
 		}
 	}
+	if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) {
+		if !a.handlePaletteClick(mx, my) {
+			if tx, ty, ok := a.mapTileFromCursor(mx, my); ok {
+				intent := gamekit.TileSpawnIntent{
+					X:        tx,
+					Y:        ty,
+					Layer:    a.editLayer,
+					Rotation: tiles.NormalizeRotationQuarter(a.editRotation),
+					Texture:  a.texture(),
+					Blocks:   a.blocks,
+				}
+				if err := gamews.Send(a.wsGame, gamekit.TypeSpawnTile, intent); err != nil {
+					log.Printf("editor spawn_tile: %v", err)
+				}
+			}
+		}
+	}
+	if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonRight) {
+		if !a.inPalette(mx, my) {
+			if tx, ty, ok := a.mapTileFromCursor(mx, my); ok {
+				cl := gamekit.TileClearIntent{X: tx, Y: ty, Layer: a.editLayer}
+				if err := gamews.Send(a.wsGame, gamekit.TypeClearTile, cl); err != nil {
+					log.Printf("editor clear_tile: %v", err)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func (a *App) Draw(screen *ebiten.Image) {
@@ -292,12 +380,66 @@ func (a *App) Draw(screen *ebiten.Image) {
 
 	a.drawPalette(screen)
 
-	line1 := "ЛКМ — тайл · ПКМ — очистить слой · , . — слой · R — поворот · Колёсико на сетке: вниз/вверх и влево/вправо (широкий лист)"
+	line1 := "ЛКМ — тайл · ПКМ — слой · F2 — сохранить мир · , . слой · R поворот · колёсико на сетке"
 	hudFace := &textv2.GoTextFace{Source: ui.FontSource(), Size: 14}
 	hudOpts := &textv2.DrawOptions{}
 	hudOpts.ColorScale.ScaleWithColor(color.RGBA{0xf0, 0xf0, 0xf0, 0xff})
 	hudOpts.GeoM.Translate(12, 8)
 	textv2.Draw(screen, line1, hudFace, hudOpts)
+
+	if a.saveToast != "" {
+		toastFace := &textv2.GoTextFace{Source: ui.FontSource(), Size: 13}
+		toastOpts := &textv2.DrawOptions{}
+		toastOpts.PrimaryAlign = textv2.AlignCenter
+		toastOpts.GeoM.Translate(float64(a.winW)/2, 36)
+		tc := color.RGBA{0xa8, 0xf0, 0xb8, 0xff}
+		if a.saveToastBad {
+			tc = color.RGBA{0xff, 0xd0, 0x88, 0xff}
+		}
+		toastOpts.ColorScale.ScaleWithColor(tc)
+		s := a.saveToast
+		if utf8.RuneCountInString(s) > 90 {
+			s = string([]rune(s)[:87]) + "…"
+		}
+		textv2.Draw(screen, s, toastFace, toastOpts)
+	}
+
+	if a.savePanelOpen {
+		a.drawSavePanel(screen)
+	}
+}
+
+func (a *App) drawSavePanel(screen *ebiten.Image) {
+	w, h := float32(a.winW), float32(a.winH)
+	vector.DrawFilledRect(screen, 0, 0, w, h, color.RGBA{0x10, 0x10, 0x18, 0xbd}, false)
+
+	const boxW, boxH float32 = 440, 130
+	bx := (w - boxW) / 2
+	by := (h - boxH) / 2
+	vector.DrawFilledRect(screen, bx, by, boxW, boxH, color.RGBA{0x28, 0x28, 0x34, 0xff}, false)
+	vector.StrokeRect(screen, bx, by, boxW, boxH, 1.5, color.RGBA{0x66, 0x66, 0x80, 0xff}, false)
+
+	face := &textv2.GoTextFace{Source: ui.FontSource(), Size: 15}
+	small := &textv2.GoTextFace{Source: ui.FontSource(), Size: 12}
+	opts := &textv2.DrawOptions{}
+	opts.ColorScale.ScaleWithColor(color.RGBA{0xee, 0xee, 0xf5, 0xff})
+	opts.GeoM.Translate(float64(bx+14), float64(by+12))
+	textv2.Draw(screen, "Сохранить мир в world-service", face, opts)
+
+	opts.GeoM.Reset()
+	opts.GeoM.Translate(float64(bx+14), float64(by+42))
+	opts.ColorScale.ScaleWithColor(color.RGBA{0xc8, 0xc8, 0xd8, 0xff})
+	preview := a.saveNameDraft
+	if preview == "" {
+		preview = "…имя…"
+		opts.ColorScale.ScaleWithColor(color.RGBA{0x88, 0x88, 0x98, 0xff})
+	}
+	textv2.Draw(screen, preview, small, opts)
+
+	opts.GeoM.Reset()
+	opts.GeoM.Translate(float64(bx+14), float64(by+88))
+	opts.ColorScale.ScaleWithColor(color.RGBA{0x90, 0x90, 0xa0, 0xff})
+	textv2.Draw(screen, "Enter — отправить   Esc / F2 — закрыть   (нужен save_world_admin_user_id на сервере)", small, opts)
 }
 
 func playerColor(id int64) color.RGBA {
