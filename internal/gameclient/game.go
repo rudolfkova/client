@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image/color"
 	"log"
+	"math"
 	"slices"
 	"strings"
 	"unicode/utf8"
@@ -26,6 +27,9 @@ import (
 const (
 	WindowWidth  = 1600
 	WindowHeight = 800
+
+	// camFollowLambda — скорость догонки цели (эксп. сглаживание); больше = меньше инерции.
+	camFollowLambda = 9.0
 )
 
 type Game struct {
@@ -42,6 +46,7 @@ type Game struct {
 	World *state.World
 
 	lastMoveDx, lastMoveDy int
+	camX, camY             float32
 
 	lobbyLines    []lobby.Line
 	lobbyDraft    string
@@ -110,22 +115,22 @@ func (g *Game) Update() error {
 				if inpututil.IsKeyJustPressed(ebiten.KeyEnter) {
 					g.sendLobbyLine()
 				}
-				return nil
-			}
-			dx, dy := arrowDirection()
-			if dx != g.lastMoveDx || dy != g.lastMoveDy {
-				g.lastMoveDx, g.lastMoveDy = dx, dy
-				if err := gamews.Send(g.wsGame, gamekit.TypeMove, gamekit.MoveIntent{DX: dx, DY: dy}); err != nil {
+			} else {
+				dx, dy := arrowDirection()
+				if dx != g.lastMoveDx || dy != g.lastMoveDy {
+					g.lastMoveDx, g.lastMoveDy = dx, dy
+					if err := gamews.Send(g.wsGame, gamekit.TypeMove, gamekit.MoveIntent{DX: dx, DY: dy}); err != nil {
+						log.Printf("ws write: %v", err)
+						return err
+					}
+				}
+				target, damage := hitPlayer()
+				if err := gamews.Send(g.wsGame, gamekit.TypeHit, gamekit.HitIntent{TargetID: target, Damage: damage}); err != nil {
 					log.Printf("ws write: %v", err)
 					return err
 				}
 			}
-			target, damage := hitPlayer()
-			if err := gamews.Send(g.wsGame, gamekit.TypeHit, gamekit.HitIntent{TargetID: target, Damage: damage}); err != nil {
-				log.Printf("ws write: %v", err)
-				return err
-			}
-
+			g.tickCamera()
 			return nil
 		}
 	}
@@ -155,8 +160,35 @@ func hitPlayer() (target int64, damage int) {
 	return target, damage
 }
 
+// cameraTarget мгновенная позиция камеры: центр окна на игроке; без игрока — (0,0).
+func (g *Game) cameraTarget() (tx, ty float32) {
+	pl, ok := g.World.Players[g.userID]
+	if !ok {
+		return 0, 0
+	}
+	px, py := world.ToScreen(pl.X, pl.Y)
+	ww, wh := ebiten.WindowSize()
+	return px - float32(ww)*0.5, py - float32(wh)*0.5
+}
+
+func (g *Game) tickCamera() {
+	tx, ty := g.cameraTarget()
+	dt := 1.0 / 60.0
+	if tps := ebiten.ActualTPS(); tps > 1 {
+		dt = 1.0 / tps
+	}
+	f := float32(1 - math.Exp(-camFollowLambda*dt))
+	g.camX += (tx - g.camX) * f
+	g.camY += (ty - g.camY) * f
+}
+
+func (g *Game) viewCam() (camX, camY float32) { return g.camX, g.camY }
+
 func (g *Game) Draw(screen *ebiten.Image) {
 	screen.Clear()
+
+	camX, camY := g.viewCam()
+	camOpts := tiles.DrawOpts{CamX: camX, CamY: camY}
 
 	tileList := slices.Clone(g.World.Tiles)
 	slices.SortFunc(tileList, func(a, b gamekit.Tile) int {
@@ -170,7 +202,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	})
 	// Текстуры из state.Texture: Base_N из assets/tileSets и одиночные ключи = имя PNG в корне assets/.
 	for _, t := range tileList {
-		tiles.Draw(screen, t, tiles.DrawOpts{})
+		tiles.Draw(screen, t, camOpts)
 	}
 
 	ids := make([]int64, 0, len(g.World.Players))
@@ -187,6 +219,8 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	for _, id := range ids {
 		pl := g.World.Players[id]
 		cx, cy := world.ToScreen(pl.X, pl.Y)
+		cx -= camX
+		cy -= camY
 		fill := playerColor(id)
 
 		vector.DrawFilledCircle(screen, cx, cy, world.PlayerRadius, fill, true)
