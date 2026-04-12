@@ -35,7 +35,14 @@ func main() {
 		log.Println("warning: empty -token; set if character-service requires service_token")
 	}
 
-	srv, err := characterweb.New(*grpcAddr, *token)
+	absData := ""
+	if p, err := filepath.Abs(*dataDir); err == nil {
+		if fi, e := os.Stat(p); e == nil && fi.IsDir() {
+			absData = p
+		}
+	}
+
+	srv, err := characterweb.New(*grpcAddr, *token, absData)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -50,12 +57,9 @@ func main() {
 	mux := http.NewServeMux()
 	srv.Register(mux, static)
 
-	absData, err := filepath.Abs(*dataDir)
-	if err == nil {
-		if fi, e := os.Stat(absData); e == nil && fi.IsDir() {
-			mux.Handle("/assets/", http.StripPrefix("/assets/", http.FileServer(http.Dir(absData))))
-			log.Printf("serving %s at /assets/", absData)
-		}
+	if absData != "" {
+		mux.Handle("/assets/", http.StripPrefix("/assets/", http.FileServer(http.Dir(absData))))
+		log.Printf("serving %s at /assets/ (GET /api/anims — список из anim/)", absData)
 	}
 
 	log.Printf("character editor http://%s/  →  gRPC %s", *listen, *grpcAddr)

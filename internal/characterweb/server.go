@@ -24,9 +24,11 @@ type Server struct {
 	grpcAddr string
 	client   characterv1.CharacterServiceClient
 	conn     *grpc.ClientConn
+	// dataRoot — абсолютный путь к каталогу data (как у -data); пусто — без сканирования anim.
+	dataRoot string
 }
 
-func New(grpcAddr, serviceToken string) (*Server, error) {
+func New(grpcAddr, serviceToken, dataRoot string) (*Server, error) {
 	conn, err := grpc.NewClient(grpcAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return nil, err
@@ -36,6 +38,7 @@ func New(grpcAddr, serviceToken string) (*Server, error) {
 		grpcAddr: grpcAddr,
 		client:   characterv1.NewCharacterServiceClient(conn),
 		conn:     conn,
+		dataRoot: dataRoot,
 	}, nil
 }
 
@@ -127,7 +130,24 @@ func (s *Server) Register(mux *http.ServeMux, static http.Handler) {
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, map[string]any{"ok": true, "grpc": s.grpcAddr})
 	})
+	mux.HandleFunc("GET /api/anims", s.handleListAnims)
 	mux.Handle("/", static)
+}
+
+func (s *Server) handleListAnims(w http.ResponseWriter, r *http.Request) {
+	if s.dataRoot == "" {
+		writeJSON(w, map[string]any{
+			"sprites": []string{},
+			"hint":    "укажите -data путь к каталогу data репозитория (там лежит anim/)",
+		})
+		return
+	}
+	list, err := ListAnimSpriteIDs(s.dataRoot)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, map[string]any{"sprites": list})
 }
 
 type listReq struct {

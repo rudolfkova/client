@@ -1,40 +1,12 @@
 package playeranim
 
-import (
-	"bytes"
-	"image"
-	"image/png"
-	"log"
-	"sync"
+import "github.com/hajimehoshi/ebiten/v2"
 
-	"github.com/hajimehoshi/ebiten/v2"
-
-	"client/data"
-)
-
-const Male01SheetPath = "anim/Male 01-1/Male 01-1.png"
-
-var male01Once sync.Once
-var male01Sheet *ebiten.Image
-
-func male01Load() {
-	raw, err := data.AnimAssets.ReadFile(Male01SheetPath)
-	if err != nil {
-		log.Printf("playeranim: %s: %v", Male01SheetPath, err)
-		return
-	}
-	img, err := png.Decode(bytes.NewReader(raw))
-	if err != nil {
-		log.Printf("playeranim: decode %s: %v", Male01SheetPath, err)
-		return
-	}
-	male01Sheet = ebiten.NewImageFromImage(img)
-}
+const male01SpriteID = "Male 01-1"
 
 // Male01Sheet загружает лист один раз; при ошибке nil.
 func Male01Sheet() *ebiten.Image {
-	male01Once.Do(male01Load)
-	return male01Sheet
+	return WalkSheet(male01SpriteID)
 }
 
 // WalkSpriteRow: строка листа — ряд 0 вниз, 1 влево, 2 вправо, 3 вверх.
@@ -64,21 +36,5 @@ func WalkFrameCol(walking bool, phase float64) int {
 
 // DrawMale01 рисует кадр по центру (cx, cy); scale — множитель к размеру кадра.
 func DrawMale01(dst *ebiten.Image, cx, cy float32, cardinal int, walking bool, phase float64, scale float64) {
-	drawWalkSheet(dst, Male01Sheet(), cx, cy, cardinal, walking, phase, scale)
-}
-
-func drawWalkSheet(dst *ebiten.Image, img *ebiten.Image, cx, cy float32, cardinal int, walking bool, phase float64, scale float64) {
-	if img == nil {
-		return
-	}
-	row := WalkSpriteRow(cardinal)
-	col := WalkFrameCol(walking, phase)
-	sx0 := col * WalkFramePx
-	sy0 := row * WalkFramePx
-	sub := img.SubImage(image.Rect(sx0, sy0, sx0+WalkFramePx, sy0+WalkFramePx)).(*ebiten.Image)
-	op := &ebiten.DrawImageOptions{}
-	op.GeoM.Translate(-float64(WalkFramePx)/2, -float64(WalkFramePx)/2)
-	op.GeoM.Scale(scale, scale)
-	op.GeoM.Translate(float64(cx), float64(cy))
-	dst.DrawImage(sub, op)
+	DrawWalkSheet(dst, male01SpriteID, cx, cy, cardinal, walking, phase, scale)
 }

@@ -40,10 +40,6 @@ const (
 	chatBubbleDur   = 5 * time.Second
 	chatBubbleRunes = 40
 
-	// Временно: листы ходьбы по id (позже — из данных мира/ECS).
-	demoAnimPlayerMale   int64 = 1
-	demoAnimPlayerFemale int64 = 2
-
 	// playerTileLayer — виртуальный слой персонажей: тайлы с Layer < этого (0=земля, 1=предметы) под ними, Layer ≥ — над (навесы и т.д.).
 	playerTileLayer = 2
 
@@ -282,8 +278,9 @@ func (g *Game) pruneChatBubbles() {
 }
 
 func (g *Game) tickDemoWalkAnims() {
-	g.tickDemoWalkFor(demoAnimPlayerMale)
-	g.tickDemoWalkFor(demoAnimPlayerFemale)
+	for id := range g.World.Players {
+		g.tickDemoWalkFor(id)
+	}
 }
 
 func (g *Game) tickDemoWalkFor(playerID int64) {
@@ -389,12 +386,13 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		cy -= camY
 		fill := playerColor(id)
 
-		if id == demoAnimPlayerMale && playeranim.Male01Sheet() != nil {
+		sprite := strings.TrimSpace(pl.Sprite)
+		if sprite == "" {
+			sprite = gamekit.DefaultPlayerSprite
+		}
+		if playeranim.WalkSheet(sprite) != nil {
 			scale := float64(world.TileSize) / float64(playeranim.WalkFramePx)
-			playeranim.DrawMale01(screen, cx, cy, playeranim.CardinalFromPlayer(pl), g.demoWalkMoving[id], g.demoWalkPhase[id], scale)
-		} else if id == demoAnimPlayerFemale && playeranim.Female012Sheet() != nil {
-			scale := float64(world.TileSize) / float64(playeranim.WalkFramePx)
-			playeranim.DrawFemale012(screen, cx, cy, playeranim.CardinalFromPlayer(pl), g.demoWalkMoving[id], g.demoWalkPhase[id], scale)
+			playeranim.DrawWalkSheet(screen, sprite, cx, cy, playeranim.CardinalFromPlayer(pl), g.demoWalkMoving[id], g.demoWalkPhase[id], scale)
 		} else {
 			vector.DrawFilledCircle(screen, cx, cy, world.PlayerRadius, fill, true)
 			vector.StrokeCircle(screen, cx, cy, world.PlayerRadius, 1.5, color.RGBA{0xff, 0xff, 0xff, 0x90}, true)
@@ -466,7 +464,11 @@ func (g *Game) drawStatsPanel(screen *ebiten.Image) {
 	}
 
 	pl, ok := g.World.Players[g.userID]
-	bodyH := float32(8 + statsTitleSize + 6 + statsLineSize + 4 + 6*statsLineSize + statsHintSize + 14)
+	extraSkin := float32(0)
+	if ok {
+		extraSkin = statsLineSize + 4
+	}
+	bodyH := float32(8+statsTitleSize+6+statsLineSize+4+extraSkin+6*statsLineSize+statsHintSize+14)
 	vector.DrawFilledRect(screen, px, py, statsPanelW, bodyH, color.RGBA{0x14, 0x16, 0x22, 0xee}, false)
 	vector.StrokeRect(screen, px, py, statsPanelW, bodyH, 1, color.RGBA{0x5a, 0x68, 0x88, 0xff}, false)
 
@@ -493,6 +495,15 @@ func (g *Game) drawStatsPanel(screen *ebiten.Image) {
 		ho.GeoM.Translate(float64(px+10), float64(ty))
 		ho.ColorScale.ScaleWithColor(color.RGBA{0xc8, 0xe8, 0xd0, 0xff})
 		textv2.Draw(screen, hpLine, lineFace, ho)
+		ty += statsLineSize + 4
+		sk := strings.TrimSpace(pl.Sprite)
+		if sk == "" {
+			sk = gamekit.DefaultPlayerSprite
+		}
+		sko := &textv2.DrawOptions{}
+		sko.GeoM.Translate(float64(px+10), float64(ty))
+		sko.ColorScale.ScaleWithColor(color.RGBA{0xb8, 0xc8, 0xe8, 0xff})
+		textv2.Draw(screen, fmt.Sprintf("Скин  %s", sk), lineFace, sko)
 		ty += statsLineSize + 6
 
 		s := pl.Stats

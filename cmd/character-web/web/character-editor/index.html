@@ -51,6 +51,23 @@
         <label>face_dx <input type="number" id="face_dx" min="-1" max="1" /></label>
         <label>face_dy <input type="number" id="face_dy" min="-1" max="1" /></label>
       </div>
+      <h3>Внешний вид</h3>
+      <p class="muted small">
+        В JSON уходит поле <code>sprite</code> — <strong>имя набора</strong> (папка <code>data/anim/&lt;имя&gt;/&lt;имя&gt;.png</code>).
+        Можно ввести только имя, либо путь вида <code>anim/Male 01-1/Male 01-1.png</code> — разберётся в имя.
+        Список подсказок подтягивается с диска через <code>GET /api/anims</code> (нужен запуск с <code>-data</code>).
+      </p>
+      <div class="row sprite-row">
+        <label for="sprite">sprite</label>
+        <input type="text" id="sprite" class="sprite-input flex-grow" list="animDatalist" placeholder="Male 01-1 или путь к .png" spellcheck="false" autocomplete="off" />
+        <datalist id="animDatalist"></datalist>
+        <button type="button" id="btnAnimRefresh" class="btn-secondary">Обновить из anim</button>
+      </div>
+      <div class="sprite-preview-box">
+        <canvas id="spritePreview" width="128" height="128"></canvas>
+        <span class="muted small">Превью ходьбы (юг)</span>
+      </div>
+
       <h4>stats</h4>
       <div class="grid-stats">
         <label>str <input type="number" id="str" min="1" max="30" /></label>

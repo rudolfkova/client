@@ -32,6 +32,7 @@
 | `face_dx` | `number` | Да | Взгляд {-1,0,1}; пара (0,0) при загрузке заменяется на дефолт (1,0). |
 | `face_dy` | `number` | Да | Взгляд {-1,0,1}. |
 | `stats` | объект | Да | См. §2.2. Если объект отсутствует или «все нули», сервер подставит дефолтные 10 по всем характеристикам. |
+| `sprite` | `string` | Рекомендуется | Имя листа ходьбы в клиенте: каталог `data/anim/<sprite>/<sprite>.png` (например **`Male 01-1`**, **`Female 01-2`**). Пусто после нормализации → **`Male 01-1`**. В **`state`** уходит как `players[].sprite`. |
 
 ### 2.2. Объект `stats` (`CharacterStats`)
 
@@ -58,6 +59,7 @@
   "hp": 10,
   "face_dx": 1,
   "face_dy": 0,
+  "sprite": "Male 01-1",
   "stats": {
     "str": 16,
     "dex": 14,
@@ -121,7 +123,7 @@
 
 1. Проверяет JWT → **`user_id`**.
 2. Если настроен character-service: **`ResolvePlayCharacter(user_id, character_id)`**.
-3. Парсит **`character.data`** как **`CharacterPlayData`** → спавн в ECS (позиция, HP, взгляд, **stats**).
+3. Парсит **`character.data`** как **`CharacterPlayData`** → спавн в ECS (позиция, HP, взгляд, **stats**, **sprite**).
 4. При отключении **последней** вкладки пользователя — сериализует обратно в JSON и пишет **`ReplaceCharacterData`** или **`CreateCharacter`** (если персонаж ещё не был в БД).
 
 ### 4.3. Событие `state` (игровой тик)
@@ -145,6 +147,7 @@
 | `hp` | number | Текущие HP. |
 | `face_dx`, `face_dy` | number | Взгляд. |
 | `stats` | object | Те же ключи `str`…`cha`, что в §2.2. |
+| `sprite` | string | Имя листа анимации (как `CharacterPlayData.sprite`); игровой клиент рисует из `data/anim/…`. |
 
 Редактор **не обязан** парсить весь `state`, но для «живого превью» на сцене полезно показывать хотя бы `stats` из последнего `state` выбранного `id`.
 
@@ -186,6 +189,8 @@ export interface CharacterPlayDataWire {
   face_dx: number;
   face_dy: number;
   stats: CharacterStatsWire;
+  /** например "Male 01-1" — папка в data/anim на игровом клиенте */
+  sprite?: string;
 }
 
 export function defaultCharacterStats(): CharacterStatsWire {
@@ -201,6 +206,7 @@ export function defaultCharacterPlayData(): CharacterPlayDataWire {
     face_dx: 1,
     face_dy: 0,
     stats: defaultCharacterStats(),
+    sprite: "Male 01-1",
   };
 }
 ```
@@ -211,7 +217,7 @@ export function defaultCharacterPlayData(): CharacterPlayDataWire {
 
 ## 7. Чеклист для нейросети / разработчика фронта
 
-1. Хранить канонический JSON персонажа в форме **`CharacterPlayDataWire`**; не выдумывать другие имена полей для stats (использовать **`str`…`cha`**).
+1. Хранить канонический JSON персонажа в форме **`CharacterPlayDataWire`**; не выдумывать другие имена полей для stats (использовать **`str`…`cha`**) и **`sprite`** (как в `gamekit`).
 2. При загрузке строки из API всегда делать **`JSON.parse`** в UTF-8 строку из `bytes`.
 3. Перед отправкой **`CreateCharacter` / `ReplaceCharacterData`**: выставить **`schema_version: 2`** в JSON и в поле **`schema_version`** сообщения protobuf (дублирование допустимо и соответствует серверу).
 4. Для входа в игру: получить JWT → выбрать UUID персонажа → открыть WebSocket с **`character_id`**.
