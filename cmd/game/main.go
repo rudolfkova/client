@@ -48,7 +48,7 @@ func main() {
 		lobbyLines = nil
 	}
 
-	characterID, err := characters.PickTerminal(sess.AccessToken)
+	characterID, characterName, err := characters.PickTerminal(sess.AccessToken)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func main() {
 	ebiten.SetVsyncEnabled(true)
 	ebiten.SetWindowResizingMode(ebiten.WindowResizingModeEnabled)
 	ebiten.SetWindowSize(gameclient.WindowWidth, gameclient.WindowHeight)
-	if err := ebiten.RunGame(gameclient.NewGame(sess.AccessToken, sess.RefreshToken, userID, lobbyID, chatConn, gameConn, gameMsgs, lobbyPush, lobbyLines)); err != nil {
+	if err := ebiten.RunGame(gameclient.NewGame(sess.AccessToken, sess.RefreshToken, userID, lobbyID, characterName, chatConn, gameConn, gameMsgs, lobbyPush, lobbyLines)); err != nil {
 		log.Fatal(err)
 	}
 }

@@ -31,7 +31,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	characterID, err := characters.PickTerminal(sess.AccessToken)
+	characterID, _, err := characters.PickTerminal(sess.AccessToken)
 	if err != nil {
 		log.Fatal(err)
 	}

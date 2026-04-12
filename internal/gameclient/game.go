@@ -46,6 +46,12 @@ const (
 
 	// playerTileLayer — виртуальный слой персонажей: тайлы с Layer < этого (0=земля, 1=предметы) под ними, Layer ≥ — над (навесы и т.д.).
 	playerTileLayer = 2
+
+	statsPanelW       = float32(228)
+	statsSlideLambda  = 11.0
+	statsTitleSize    = 15.0
+	statsLineSize     = 13.0
+	statsHintSize     = 11.0
 )
 
 type chatBubble struct {
@@ -80,9 +86,13 @@ type Game struct {
 
 	demoWalkPhase   map[int64]float64
 	demoWalkMoving  map[int64]bool
+
+	characterDisplayName string
+	statsPanelOpen      bool
+	statsSlide          float32 // 0 = спрятано влево, 1 = видно (сглаживание)
 }
 
-func NewGame(accessToken, refreshToken string, userID int64, lobbyChatID int64, wsChat *websocket.Conn, wsGame *websocket.Conn, wsMsgs <-chan gamekit.Envelope, wsLobbyPush <-chan lobby.SubscribeMessage, lobbyLines []lobby.Line) *Game {
+func NewGame(accessToken, refreshToken string, userID int64, lobbyChatID int64, characterDisplayName string, wsChat *websocket.Conn, wsGame *websocket.Conn, wsMsgs <-chan gamekit.Envelope, wsLobbyPush <-chan lobby.SubscribeMessage, lobbyLines []lobby.Line) *Game {
 	_ = ui.FontSource()
 	return &Game{
 		jwt:     accessToken,
@@ -103,10 +113,15 @@ func NewGame(accessToken, refreshToken string, userID int64, lobbyChatID int64, 
 		chatBubbles:    make(map[int64]chatBubble),
 		demoWalkPhase:  make(map[int64]float64),
 		demoWalkMoving: make(map[int64]bool),
+
+		characterDisplayName: strings.TrimSpace(characterDisplayName),
+		statsPanelOpen:       true,
+		statsSlide:           1,
 	}
 }
 
 func (g *Game) Update() error {
+	g.tickStatsPanelSlide()
 	for {
 		select {
 		case msg, ok := <-g.wsMsgs:
@@ -152,6 +167,16 @@ func (g *Game) Update() error {
 					g.sendLobbyLine()
 				}
 			} else {
+				if inpututil.IsKeyJustPressed(ebiten.KeyC) {
+					g.statsPanelOpen = !g.statsPanelOpen
+				}
+				if g.statsSlide < 0.4 && inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) {
+					mx, my := ebiten.CursorPosition()
+					const tabW = 12
+					if mx >= 0 && mx < tabW && my >= 50 && my < 50+54 {
+						g.statsPanelOpen = !g.statsPanelOpen
+					}
+				}
 				dx, dy := arrowDirection()
 				moving := dx != 0 || dy != 0
 				wasMoving := g.lastMoveDx != 0 || g.lastMoveDy != 0
@@ -219,6 +244,19 @@ func (g *Game) cameraTarget() (tx, ty float32) {
 	px, py := world.ToScreenCenterF(vx, vy)
 	ww, wh := ebiten.WindowSize()
 	return px - float32(ww)*0.5, py - float32(wh)*0.5
+}
+
+func (g *Game) tickStatsPanelSlide() {
+	target := float32(0)
+	if g.statsPanelOpen {
+		target = 1
+	}
+	dt := float32(1.0 / 60.0)
+	if tps := ebiten.ActualTPS(); tps > 1 {
+		dt = float32(1.0 / tps)
+	}
+	f := float32(1 - math.Exp(-statsSlideLambda*float64(dt)))
+	g.statsSlide += (target - g.statsSlide) * f
 }
 
 func (g *Game) tickCamera() {
@@ -412,7 +450,100 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		}
 	}
 
+	g.drawStatsPanel(screen)
 	g.drawLobbyChat(screen)
+}
+
+func abMod(v int) int { return (v - 10) / 2 }
+
+func (g *Game) drawStatsPanel(screen *ebiten.Image) {
+	px := float32(14) - (1-g.statsSlide)*float32(statsPanelW+28)
+	py := float32(14)
+
+	title := g.characterDisplayName
+	if title == "" {
+		title = fmt.Sprintf("Игрок %d", g.userID)
+	}
+
+	pl, ok := g.World.Players[g.userID]
+	bodyH := float32(8 + statsTitleSize + 6 + statsLineSize + 4 + 6*statsLineSize + statsHintSize + 14)
+	vector.DrawFilledRect(screen, px, py, statsPanelW, bodyH, color.RGBA{0x14, 0x16, 0x22, 0xee}, false)
+	vector.StrokeRect(screen, px, py, statsPanelW, bodyH, 1, color.RGBA{0x5a, 0x68, 0x88, 0xff}, false)
+
+	titleFace := &textv2.GoTextFace{Source: ui.FontSource(), Size: statsTitleSize}
+	lineFace := &textv2.GoTextFace{Source: ui.FontSource(), Size: statsLineSize}
+	hintFace := &textv2.GoTextFace{Source: ui.FontSource(), Size: statsHintSize}
+
+	ty := py + 8.0
+	to := &textv2.DrawOptions{}
+	to.GeoM.Translate(float64(px+10), float64(ty))
+	to.ColorScale.ScaleWithColor(color.RGBA{0xf2, 0xf4, 0xfc, 0xff})
+	textv2.Draw(screen, title, titleFace, to)
+	ty += float32(statsTitleSize + 6)
+
+	if !ok {
+		lo := &textv2.DrawOptions{}
+		lo.GeoM.Translate(float64(px+10), float64(ty))
+		lo.ColorScale.ScaleWithColor(color.RGBA{0xa8, 0xb0, 0xc8, 0xff})
+		textv2.Draw(screen, "Ожидание состояния…", lineFace, lo)
+		ty += statsLineSize + 8
+	} else {
+		hpLine := fmt.Sprintf("HP  %d", pl.HP)
+		ho := &textv2.DrawOptions{}
+		ho.GeoM.Translate(float64(px+10), float64(ty))
+		ho.ColorScale.ScaleWithColor(color.RGBA{0xc8, 0xe8, 0xd0, 0xff})
+		textv2.Draw(screen, hpLine, lineFace, ho)
+		ty += statsLineSize + 6
+
+		s := pl.Stats
+		rows := []struct {
+			label string
+			val   int
+		}{
+			{"Сила", s.Strength},
+			{"Ловкость", s.Dexterity},
+			{"Телосложение", s.Constitution},
+			{"Интеллект", s.Intelligence},
+			{"Мудрость", s.Wisdom},
+			{"Харизма", s.Charisma},
+		}
+		for _, row := range rows {
+			m := abMod(row.val)
+			line := fmt.Sprintf("%-14s  %2d  (%+d)", row.label, row.val, m)
+			ro := &textv2.DrawOptions{}
+			ro.GeoM.Translate(float64(px+10), float64(ty))
+			ro.ColorScale.ScaleWithColor(color.RGBA{0xd8, 0xdc, 0xec, 0xff})
+			textv2.Draw(screen, line, lineFace, ro)
+			ty += statsLineSize + 2
+		}
+		ty += 4
+	}
+
+	hin := &textv2.DrawOptions{}
+	hin.GeoM.Translate(float64(px+10), float64(ty))
+	hin.ColorScale.ScaleWithColor(color.RGBA{0x88, 0x90, 0xa8, 0xff})
+	textv2.Draw(screen, "C — скрыть / показать панель", hintFace, hin)
+
+	// полоска-«ручка», когда панель почти уехала
+	if g.statsSlide < 0.35 {
+		tabW := float32(10.0)
+		tabH := float32(52.0)
+		tabX := float32(0)
+		tabY := py + 36.0
+		vector.DrawFilledRect(screen, tabX, tabY, tabW, tabH, color.RGBA{0x28, 0x2c, 0x3c, 0xf0}, false)
+		vector.StrokeRect(screen, tabX, tabY, tabW, tabH, 1, color.RGBA{0x6a, 0x78, 0x98, 0xff}, false)
+		glyph := "›"
+		if !g.statsPanelOpen {
+			glyph = "‹"
+		}
+		gf := &textv2.GoTextFace{Source: ui.FontSource(), Size: 16}
+		go2 := &textv2.DrawOptions{}
+		go2.PrimaryAlign = textv2.AlignCenter
+		go2.SecondaryAlign = textv2.AlignCenter
+		go2.GeoM.Translate(float64(tabX+tabW*0.5), float64(tabY+tabH*0.5))
+		go2.ColorScale.ScaleWithColor(color.RGBA{0xc8, 0xd0, 0xe8, 0xff})
+		textv2.Draw(screen, glyph, gf, go2)
+	}
 }
 
 func playerColor(id int64) color.RGBA {

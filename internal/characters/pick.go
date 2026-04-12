@@ -8,17 +8,17 @@ import (
 )
 
 // PickTerminal запрашивает GET /api/me/characters и номер в stdin.
-// Пустая строка без ошибки — gateway вернул character_service_unconfigured (подключайтесь без character_id).
-func PickTerminal(accessToken string) (characterID string, err error) {
+// Пустые id и name без ошибки — gateway вернул character_service_unconfigured (подключайтесь без character_id).
+func PickTerminal(accessToken string) (characterID, displayName string, err error) {
 	list, err := ListMine(accessToken, 50, 0)
 	if errors.Is(err, ErrCharacterServiceUnconfigured) {
-		return "", nil
+		return "", "", nil
 	}
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if len(list) == 0 {
-		return "", fmt.Errorf("нет персонажей для этого аккаунта: создайте через character-web или API, затем перезапустите клиент")
+		return "", "", fmt.Errorf("нет персонажей для этого аккаунта: создайте через character-web или API, затем перезапустите клиент")
 	}
 
 	fmt.Println("\nПерсонажи (введите номер):")
@@ -34,11 +34,12 @@ func PickTerminal(accessToken string) (characterID string, err error) {
 	fmt.Printf("\nНомер персонажа [1-%d]: ", len(list))
 	var line string
 	if _, e := fmt.Scanln(&line); e != nil {
-		return "", e
+		return "", "", e
 	}
 	n, err := strconv.Atoi(strings.TrimSpace(line))
 	if err != nil || n < 1 || n > len(list) {
-		return "", fmt.Errorf("неверный номер: ожидалось 1–%d", len(list))
+		return "", "", fmt.Errorf("неверный номер: ожидалось 1–%d", len(list))
 	}
-	return list[n-1].ID, nil
+	ch := list[n-1]
+	return ch.ID, ch.DisplayName, nil
 }
