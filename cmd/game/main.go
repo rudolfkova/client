@@ -9,6 +9,7 @@ import (
 	"github.com/rudolfkova/grpc_auth/pkg/gamekit"
 
 	"client/internal/auth"
+	"client/internal/characters"
 	"client/internal/gameclient"
 	"client/internal/lobby"
 	"client/internal/ws"
@@ -47,10 +48,18 @@ func main() {
 		lobbyLines = nil
 	}
 
+	characterID, err := characters.PickTerminal(sess.AccessToken)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if characterID == "" {
+		log.Println("Персонажи: gateway без character-service — вход в игру без character_id.")
+	}
+
 	gameMsgs := make(chan gamekit.Envelope, ws.GameChanCap)
 	lobbyPush := make(chan lobby.SubscribeMessage, lobby.SubscribeChanCap)
 
-	gameConn, err := ws.Connect("/ws/game", sess.AccessToken)
+	gameConn, err := ws.ConnectGame(sess.AccessToken, characterID)
 	if err != nil {
 		log.Fatalf("ws game dial: %v", err)
 	}

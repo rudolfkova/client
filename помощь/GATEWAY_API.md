@@ -134,6 +134,39 @@ Authorization: Bearer <access_token>
 
 ---
 
+### `GET /api/me/characters`
+
+Список персонажей текущего пользователя (character-service). Требуется заголовок **`Authorization: Bearer <access_token>`**; `user_id` берётся из JWT на gateway.
+
+**Query:**
+
+| Параметр | По умолчанию | Максимум |
+|----------|----------------|----------|
+| `limit`  | 50             | 100      |
+| `offset` | 0              | —        |
+
+**Ответ `200`:**
+
+```json
+{
+  "characters": [
+    {
+      "id": "<uuid>",
+      "display_name": "…",
+      "description": "…",
+      "schema_version": 2,
+      "version": 1
+    }
+  ]
+}
+```
+
+Поле **`data`** в ответ не включается.
+
+**Ошибки:** тело JSON `{"code":"…","message":"…"}`. Частые: **`401`** + `unauthorized`; **`503`** + `character_service_unconfigured`, если в конфиге gateway не задан `character_service_addr`.
+
+---
+
 ### `GET /auth/is-admin`
 
 **Query (обязательно):** `user_id=<int64>`
@@ -396,9 +429,10 @@ Authorization: Bearer <access_token>
 | Параметр     | Описание |
 |--------------|----------|
 | `token`      | Access JWT (как в игровом WS). |
+| `character_id` | UUID персонажа (обязателен, если у game-service настроен character-service). Список: **`GET /api/me/characters`**. |
 | `session_id` | Опционально; пробрасывается в backend как query-параметр. |
 
-Пример: `ws://<host>/ws/game?token=<access_token>`
+Пример: `ws://<host>/ws/game?token=<access_token>&character_id=<uuid>`
 
 Если game-service недоступен, клиент может получить одно JSON-сообщение и закрытие:
 
@@ -424,6 +458,7 @@ Authorization: Bearer <access_token>
 | POST | `/auth/logout` | Выход (refresh) |
 | POST | `/auth/refresh` | Новые токены |
 | GET | `/auth/is-admin` | Админ по `user_id` |
+| GET | `/api/me/characters` | Список персонажей (JWT) |
 | POST | `/chat/create` | Создать чат |
 | DELETE | `/chat` | Удалить чат (JSON body) |
 | POST | `/chat/members` | Добавить участника |

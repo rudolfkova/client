@@ -1,0 +1,98 @@
+:root {
+  font-family: system-ui, sans-serif;
+  background: #121218;
+  color: #e8e8ef;
+}
+body {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 1rem 1.25rem 2rem;
+}
+h1 { font-size: 1.35rem; margin: 0 0 0.25rem; }
+h2 { font-size: 1.05rem; margin: 0 0 0.75rem; }
+h3, h4 { font-size: 0.95rem; margin: 1rem 0 0.5rem; }
+.muted { color: #8c8c9a; }
+.small { font-size: 0.8rem; }
+code { font-size: 0.85em; background: #1e1e28; padding: 0.1em 0.35em; border-radius: 4px; }
+header { margin-bottom: 1rem; }
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  align-items: center;
+  margin-bottom: 0.65rem;
+}
+.row label { min-width: 8rem; font-size: 0.88rem; }
+input[type="text"],
+input[type="number"] {
+  background: #1a1a24;
+  border: 1px solid #35354a;
+  color: inherit;
+  padding: 0.35rem 0.5rem;
+  border-radius: 6px;
+  min-width: 12rem;
+}
+input[type="number"] { min-width: 5rem; }
+.layout {
+  display: flex;
+  gap: 1.25rem;
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+.panel {
+  background: #1a1a22;
+  border: 1px solid #2e2e3c;
+  border-radius: 10px;
+  padding: 0.85rem 1rem;
+  flex: 1 1 260px;
+}
+.panel.grow { flex: 2 1 420px; }
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+th, td {
+  text-align: left;
+  padding: 0.35rem 0.4rem;
+  border-bottom: 1px solid #2a2a36;
+}
+tr[data-selectable]:hover { background: #24242e; cursor: pointer; }
+tr.selected { background: #2a2a44; }
+.err {
+  background: #3a2020;
+  color: #ffb4b4;
+  padding: 0.5rem 0.65rem;
+  border-radius: 6px;
+  margin-bottom: 0.5rem;
+  font-size: 0.88rem;
+}
+.grid-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 0.5rem;
+}
+.grid-stats label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.82rem;
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+button {
+  background: #35354a;
+  color: inherit;
+  border: 1px solid #4a4a62;
+  padding: 0.45rem 0.75rem;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.88rem;
+}
+button:hover { filter: brightness(1.08); }
+button.primary { background: #2d4a6e; border-color: #4a6a9a; }
+button.danger { background: #5a2a2a; border-color: #8a4040; }

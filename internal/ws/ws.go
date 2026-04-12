@@ -15,6 +15,19 @@ import (
 const GameChanCap = 256
 
 func Connect(path, jwt string) (*websocket.Conn, error) {
+	return dialWS(path, jwt, nil)
+}
+
+// ConnectGame — WebSocket игры; при непустом characterId добавляется query character_id (UUID).
+func ConnectGame(jwt, characterID string) (*websocket.Conn, error) {
+	var extra map[string]string
+	if characterID != "" {
+		extra = map[string]string{"character_id": characterID}
+	}
+	return dialWS("/ws/game", jwt, extra)
+}
+
+func dialWS(path, jwt string, extraQuery map[string]string) (*websocket.Conn, error) {
 	u := url.URL{
 		Scheme: "ws",
 		Host:   config.GatewayHostPort,
@@ -22,6 +35,11 @@ func Connect(path, jwt string) (*websocket.Conn, error) {
 	}
 	q := u.Query()
 	q.Set("token", jwt)
+	for k, v := range extraQuery {
+		if v != "" {
+			q.Set(k, v)
+		}
+	}
 	u.RawQuery = q.Encode()
 
 	conn, resp, err := websocket.DefaultDialer.Dial(u.String(), nil)

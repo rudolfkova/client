@@ -43,6 +43,9 @@ const (
 	// Временно: листы ходьбы по id (позже — из данных мира/ECS).
 	demoAnimPlayerMale   int64 = 1
 	demoAnimPlayerFemale int64 = 2
+
+	// playerTileLayer — виртуальный слой персонажей: тайлы с Layer < этого (0=земля, 1=предметы) под ними, Layer ≥ — над (навесы и т.д.).
+	playerTileLayer = 2
 )
 
 type chatBubble struct {
@@ -320,7 +323,9 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	})
 	// Текстуры из state.Texture: Base_N из assets/tileSets и одиночные ключи = имя PNG в корне assets/.
 	for _, t := range tileList {
-		tiles.Draw(screen, t, camOpts)
+		if t.Layer < playerTileLayer {
+			tiles.Draw(screen, t, camOpts)
+		}
 	}
 
 	ids := make([]int64, 0, len(g.World.Players))
@@ -400,6 +405,13 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		opts.ColorScale.ScaleWithColor(color.RGBA{0xff, 0xff, 0xff, 0xff})
 		textv2.Draw(screen, idLabel, face, opts)
 	}
+
+	for _, t := range tileList {
+		if t.Layer >= playerTileLayer {
+			tiles.Draw(screen, t, camOpts)
+		}
+	}
+
 	g.drawLobbyChat(screen)
 }
 

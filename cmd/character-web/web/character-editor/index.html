@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Персонажи (character-service)</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>Персонажи</h1>
+    <p class="muted">Локальный инструмент: HTTP-сервер проксирует gRPC в character-service.</p>
+  </header>
+
+  <section class="row">
+    <label>user_id (владелец)</label>
+    <input type="number" id="userId" value="1" min="1" step="1" />
+    <button type="button" id="btnList">Обновить список</button>
+  </section>
+
+  <div class="layout">
+    <section class="panel">
+      <h2>Список</h2>
+      <div id="listErr" class="err" hidden></div>
+      <table>
+        <thead><tr><th>id</th><th>имя</th><th>ver</th></tr></thead>
+        <tbody id="listBody"></tbody>
+      </table>
+    </section>
+
+    <section class="panel grow">
+      <h2>Редактирование</h2>
+      <div id="formErr" class="err" hidden></div>
+      <div class="row">
+        <label>character_id (UUID)</label>
+        <input type="text" id="characterId" placeholder="после создания или из списка" />
+      </div>
+      <div class="row">
+        <label>display_name</label>
+        <input type="text" id="displayName" />
+      </div>
+      <div class="row">
+        <label>description</label>
+        <input type="text" id="description" />
+      </div>
+      <h3>play_data (как в gamekit)</h3>
+      <div class="grid-stats">
+        <label>x <input type="number" id="x" /></label>
+        <label>y <input type="number" id="y" /></label>
+        <label>hp <input type="number" id="hp" /></label>
+        <label>face_dx <input type="number" id="face_dx" min="-1" max="1" /></label>
+        <label>face_dy <input type="number" id="face_dy" min="-1" max="1" /></label>
+      </div>
+      <h4>stats</h4>
+      <div class="grid-stats">
+        <label>str <input type="number" id="str" min="1" max="30" /></label>
+        <label>dex <input type="number" id="dex" min="1" max="30" /></label>
+        <label>con <input type="number" id="con" min="1" max="30" /></label>
+        <label>int <input type="number" id="int" min="1" max="30" /></label>
+        <label>wis <input type="number" id="wis" min="1" max="30" /></label>
+        <label>cha <input type="number" id="cha" min="1" max="30" /></label>
+      </div>
+      <div class="row version">
+        <label>version (для optimistic lock; 0 = выкл.)</label>
+        <input type="number" id="version" value="0" min="0" step="1" />
+      </div>
+      <div class="actions">
+        <button type="button" id="btnNew">Новый шаблон</button>
+        <button type="button" id="btnLoad">Загрузить по id</button>
+        <button type="button" id="btnCreate">Создать</button>
+        <button type="button" id="btnSave" class="primary">Сохранить data</button>
+        <button type="button" id="btnDelete" class="danger">Удалить</button>
+      </div>
+      <p class="muted small">Схема JSON: см. <code>помощь/character-editor/CHARACTER_EDITOR_CLIENT.md</code>. Спрайты из репозитория: <code>/assets/...</code> (если сервер запущен с <code>-data</code>).</p>
+    </section>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
