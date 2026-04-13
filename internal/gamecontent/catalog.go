@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"slices"
+	"strings"
 
 	"github.com/rudolfkova/grpc_auth/pkg/gamekit/content"
 )
@@ -34,4 +35,24 @@ func InteractTextureSet(jsonRaw []byte) map[string]struct{} {
 		m[id] = struct{}{}
 	}
 	return m
+}
+
+// ItemDisplayName — имя предмета из каталога по ключу/texture; иначе пустая строка.
+func ItemDisplayName(jsonRaw []byte, texture string) string {
+	texture = strings.TrimSpace(texture)
+	if texture == "" {
+		return ""
+	}
+	var c content.Catalog
+	if err := json.Unmarshal(jsonRaw, &c); err != nil {
+		return ""
+	}
+	def, ok := c.Items[texture]
+	if !ok {
+		return ""
+	}
+	if n := strings.TrimSpace(def.Name); n != "" {
+		return n
+	}
+	return strings.TrimSpace(def.ID)
 }

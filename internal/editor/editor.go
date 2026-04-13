@@ -96,6 +96,9 @@ type App struct {
 	spawnArgsErr             string
 	spawnArgsCursor          int // байтовое смещение в spawnArgsDraft
 	spawnArgsFirstLine       int // первая видимая строка (для длинного JSON)
+
+	catalogInteractSet map[string]struct{} // texture == id предмета с interact (жёлтая обводка)
+	showTileOverlay    bool                 // F3: координаты и имя предмета на тайлах
 }
 
 func New(wsGame *websocket.Conn, msgs <-chan gamekit.Envelope) *App {
@@ -109,6 +112,10 @@ func New(wsGame *websocket.Conn, msgs <-chan gamekit.Envelope) *App {
 		}
 	}
 	catIDs := gamecontent.InteractItemIDs(data.ContentCatalogJSON)
+	catSet := make(map[string]struct{}, len(catIDs))
+	for _, id := range catIDs {
+		catSet[id] = struct{}{}
+	}
 	return &App{
 		wsGame:               wsGame,
 		msgs:                 msgs,
@@ -119,6 +126,7 @@ func New(wsGame *websocket.Conn, msgs <-chan gamekit.Envelope) *App {
 		blocks:               true,
 		pickTilesets:         true,
 		catalogInteractIDs:   catIDs,
+		catalogInteractSet:   catSet,
 		singleIdx:            0,
 		paletteWidth: paletteMinW,
 		winW:         WindowWidth,
@@ -230,6 +238,81 @@ func (a *App) drawTileRectSel(screen *ebiten.Image, x0, y0, x1, y1 int, fill, st
 		st = 1
 	}
 	vector.StrokeRect(screen, fx, fy, fw, fh, st, stroke, false)
+}
+
+// drawEditorTileChrome — жёлтая внутренняя обводка у тайлов-предметов (каталог с interact); по F3 — подписи клетки и имени.
+func (a *App) drawEditorTileChrome(screen *ebiten.Image, tileList []gamekit.Tile) {
+	z := a.camZoomEffective()
+	gp := float32(world.GridPad)
+	ts0 := float32(world.TileSize)
+	ts := ts0 * z
+
+	sz := 11.0 * float64(z)
+	if sz < 9 {
+		sz = 9
+	}
+	face := &textv2.GoTextFace{Source: ui.FontSource(), Size: sz}
+
+	for _, t := range tileList {
+		x0 := (gp + float32(t.X)*ts0 - a.camX) * z
+		y0 := (gp + float32(t.Y)*ts0 - a.camY) * z
+		tex := strings.TrimSpace(t.Texture)
+
+		if _, isItem := a.catalogInteractSet[tex]; isItem {
+			inset := float32(3.5) * z
+			if inset < 1.2 {
+				inset = 1.2
+			}
+			maxIn := ts * float32(0.22)
+			if inset > maxIn {
+				inset = maxIn
+			}
+			inner := ts - 2*inset
+			if inner > 2 {
+				vector.StrokeRect(screen, x0+inset, y0+inset, inner, inner, 1.2,
+					color.RGBA{0xee, 0xcc, 0x44, 0xe5}, false)
+			}
+		}
+
+		if !a.showTileOverlay {
+			continue
+		}
+
+		cx := x0 + ts*0.5
+		cy := y0 + ts*0.5
+		lab := fmt.Sprintf("%d,%d", t.X, t.Y)
+		opts := &textv2.DrawOptions{}
+		opts.PrimaryAlign = textv2.AlignCenter
+		opts.SecondaryAlign = textv2.AlignCenter
+		opts.GeoM.Translate(float64(cx+1), float64(cy-2*z+1))
+		opts.ColorScale.ScaleWithColor(color.RGBA{0x12, 0x14, 0x1c, 0x9a})
+		textv2.Draw(screen, lab, face, opts)
+		opts.GeoM.Reset()
+		opts.GeoM.Translate(float64(cx), float64(cy-2*z))
+		opts.ColorScale.ScaleWithColor(color.RGBA{0xf6, 0xf7, 0xfb, 0xee})
+		textv2.Draw(screen, lab, face, opts)
+
+		if _, isItem := a.catalogInteractSet[tex]; isItem {
+			name := gamecontent.ItemDisplayName(data.ContentCatalogJSON, tex)
+			if utf8.RuneCountInString(name) > 14 {
+				name = string([]rune(name)[:11]) + "…"
+			}
+			if name != "" {
+				dy := float32(11) * z
+				if dy < 10 {
+					dy = 10
+				}
+				opts.GeoM.Reset()
+				opts.GeoM.Translate(float64(cx+1), float64(cy+dy+1))
+				opts.ColorScale.ScaleWithColor(color.RGBA{0x12, 0x14, 0x1c, 0x9a})
+				textv2.Draw(screen, name, face, opts)
+				opts.GeoM.Reset()
+				opts.GeoM.Translate(float64(cx), float64(cy+dy))
+				opts.ColorScale.ScaleWithColor(color.RGBA{0xf0, 0xe8, 0xb0, 0xee})
+				textv2.Draw(screen, name, face, opts)
+			}
+		}
+	}
 }
 
 func (a *App) camZoomEffective() float32 {
@@ -403,6 +486,10 @@ func (a *App) Update() error {
 	}
 	if a.saveToast != "" && !a.saveToastDeadline.IsZero() && time.Now().After(a.saveToastDeadline) {
 		a.saveToast = ""
+	}
+
+	if inpututil.IsKeyJustPressed(ebiten.KeyF3) {
+		a.showTileOverlay = !a.showTileOverlay
 	}
 
 	if a.spawnArgsOpen {
@@ -679,6 +766,7 @@ func (a *App) Draw(screen *ebiten.Image) {
 	for _, t := range tileList {
 		tiles.Draw(screen, t, camOpts)
 	}
+	a.drawEditorTileChrome(screen, tileList)
 
 	if !a.savePanelOpen && !a.spawnArgsOpen {
 		cmx, cmy := ebiten.CursorPosition()
@@ -732,7 +820,7 @@ func (a *App) Draw(screen *ebiten.Image) {
 
 	a.drawPalette(screen)
 
-	line1 := "Стрелки — камера · Shift+стрелки — палитра · над картой: колёсико — масштаб · +/- — масштаб к центру · над сеткой палитры: колёсико / Shift+колёсико вбок · ЛКМ кисть · Ctrl+ЛКМ заливка (не «Предметы») · ПКМ стереть · «Предметы»: ЛКМ — окно instance_args · край палитры — ширина · F2 сохранить · , . слой · R поворот"
+	line1 := "Стрелки — камера · Shift+стрелки — палитра · над картой: колёсико — масштаб · +/- — масштаб к центру · над сеткой палитры: колёсико / Shift+колёсико вбок · ЛКМ кисть · Ctrl+ЛКМ заливка (не «Предметы») · ПКМ стереть · «Предметы»: ЛКМ — окно instance_args · F3 подписи клеток · край палитры — ширина · F2 сохранить · , . слой · R поворот"
 	hudFace := &textv2.GoTextFace{Source: ui.FontSource(), Size: 14}
 	hudOpts := &textv2.DrawOptions{}
 	hudOpts.ColorScale.ScaleWithColor(color.RGBA{0xf0, 0xf0, 0xf0, 0xff})
