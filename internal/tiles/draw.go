@@ -83,13 +83,23 @@ type DrawOpts struct {
 	OutlineBlocking bool
 	// CamX, CamY — смещение камеры в px (редактор); в игре оставлять 0.
 	CamX, CamY float32
+	// CamZoom — масштаб карты (только редактор); 0 или отрицательное = 1. В игре не задавать.
+	CamZoom float32
+}
+
+func drawCamZoom(z float32) float32 {
+	if z <= 0 {
+		return 1
+	}
+	return z
 }
 
 // Draw рисует один тайл: текстура из assets либо сплошная заливка-заглушка.
 func Draw(screen *ebiten.Image, t gamekit.Tile, opts DrawOpts) {
-	x0 := float32(world.GridPad) + float32(t.X)*float32(world.TileSize) - opts.CamX
-	y0 := float32(world.GridPad) + float32(t.Y)*float32(world.TileSize) - opts.CamY
-	ts := float32(world.TileSize)
+	z := drawCamZoom(opts.CamZoom)
+	x0 := (float32(world.GridPad) + float32(t.X)*float32(world.TileSize) - opts.CamX) * z
+	y0 := (float32(world.GridPad) + float32(t.Y)*float32(world.TileSize) - opts.CamY) * z
+	ts := float32(world.TileSize) * z
 
 	img := imageForTexture(t.Texture)
 	if img != nil {
@@ -110,9 +120,10 @@ func Draw(screen *ebiten.Image, t gamekit.Tile, opts DrawOpts) {
 
 // DrawGhost полупрозрачный тайл (курсор в редакторе).
 func DrawGhost(screen *ebiten.Image, tx, ty int, texture string, rotationQuarter int, blocks bool, opts DrawOpts, alpha float32) {
-	x0 := float32(world.GridPad) + float32(tx)*float32(world.TileSize) - opts.CamX
-	y0 := float32(world.GridPad) + float32(ty)*float32(world.TileSize) - opts.CamY
-	ts := float32(world.TileSize)
+	z := drawCamZoom(opts.CamZoom)
+	x0 := (float32(world.GridPad) + float32(tx)*float32(world.TileSize) - opts.CamX) * z
+	y0 := (float32(world.GridPad) + float32(ty)*float32(world.TileSize) - opts.CamY) * z
+	ts := float32(world.TileSize) * z
 	a8 := uint8(min(255, int(256*alpha)))
 	img := imageForTexture(texture)
 	if img != nil {

@@ -17,7 +17,9 @@ import (
 	"github.com/hajimehoshi/ebiten/v2/vector"
 	"github.com/rudolfkova/grpc_auth/pkg/gamekit"
 
+	"client/data"
 	"client/internal/gamews"
+	"client/internal/gamecontent"
 	"client/internal/lobby"
 	"client/internal/playeranim"
 	"client/internal/state"
@@ -86,6 +88,8 @@ type Game struct {
 	characterDisplayName string
 	statsPanelOpen      bool
 	statsSlide          float32 // 0 = спрятано влево, 1 = видно (сглаживание)
+
+	interactTextures map[string]struct{} // texture == id из catalog с interact
 }
 
 func NewGame(accessToken, refreshToken string, userID int64, lobbyChatID int64, characterDisplayName string, wsChat *websocket.Conn, wsGame *websocket.Conn, wsMsgs <-chan gamekit.Envelope, wsLobbyPush <-chan lobby.SubscribeMessage, lobbyLines []lobby.Line) *Game {
@@ -113,6 +117,8 @@ func NewGame(accessToken, refreshToken string, userID int64, lobbyChatID int64, 
 		characterDisplayName: strings.TrimSpace(characterDisplayName),
 		statsPanelOpen:       true,
 		statsSlide:           1,
+
+		interactTextures: gamecontent.InteractTextureSet(data.ContentCatalogJSON),
 	}
 }
 
@@ -193,6 +199,9 @@ func (g *Game) Update() error {
 					log.Printf("ws write: %v", err)
 					return err
 				}
+				if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonRight) {
+					g.tryInteractAtCursor()
+				}
 			}
 			g.tickPlayerVis()
 			g.tickDemoWalkAnims()
@@ -225,6 +234,52 @@ func hitPlayer() (target int64, damage int) {
 		target = 4
 	}
 	return target, damage
+}
+
+// tryInteractAtCursor — ПКМ по клетке: верхний тайл с texture из каталога (interact) → WS interact.
+func (g *Game) tryInteractAtCursor() {
+	if len(g.interactTextures) == 0 {
+		return
+	}
+	mx, my := ebiten.CursorPosition()
+	cx, cy := g.viewCam()
+	tx, ty, cell := world.TileFromScreenWithCam(mx, my, cx, cy)
+	if !cell {
+		return
+	}
+	var best *gamekit.Tile
+	bestL := -100000
+	for i := range g.World.Tiles {
+		t := &g.World.Tiles[i]
+		if t.X != tx || t.Y != ty {
+			continue
+		}
+		if _, isInteract := g.interactTextures[t.Texture]; !isInteract {
+			continue
+		}
+		if t.Layer > bestL {
+			bestL = t.Layer
+			best = t
+		}
+	}
+	if best == nil {
+		return
+	}
+	id := strings.TrimSpace(best.Texture)
+	if id == "" {
+		return
+	}
+	ix, iy := tx, ty
+	L := best.Layer
+	intent := gamekit.InteractIntent{
+		ItemDefID:  id,
+		ClickX:     &ix,
+		ClickY:     &iy,
+		ClickLayer: &L,
+	}
+	if err := gamews.Send(g.wsGame, gamekit.TypeInteract, intent); err != nil {
+		log.Printf("ws interact: %v", err)
+	}
 }
 
 // cameraTarget мгновенная позиция камеры: центр окна на игроке (по сглаженным координатам); без игрока — (0,0).
@@ -468,7 +523,7 @@ func (g *Game) drawStatsPanel(screen *ebiten.Image) {
 	if ok {
 		extraSkin = statsLineSize + 4
 	}
-	bodyH := float32(8+statsTitleSize+6+statsLineSize+4+extraSkin+6*statsLineSize+statsHintSize+14)
+	bodyH := float32(8+statsTitleSize+6+statsLineSize+4+extraSkin+6*statsLineSize+2*statsHintSize+22)
 	vector.DrawFilledRect(screen, px, py, statsPanelW, bodyH, color.RGBA{0x14, 0x16, 0x22, 0xee}, false)
 	vector.StrokeRect(screen, px, py, statsPanelW, bodyH, 1, color.RGBA{0x5a, 0x68, 0x88, 0xff}, false)
 
@@ -531,6 +586,11 @@ func (g *Game) drawStatsPanel(screen *ebiten.Image) {
 	}
 
 	hin := &textv2.DrawOptions{}
+	hin.GeoM.Translate(float64(px+10), float64(ty))
+	hin.ColorScale.ScaleWithColor(color.RGBA{0x88, 0x90, 0xa8, 0xff})
+	textv2.Draw(screen, "ПКМ по предмету на карте (тайл = id из catalog) — взаимодействие", hintFace, hin)
+	ty += statsHintSize + 4
+	hin.GeoM.Reset()
 	hin.GeoM.Translate(float64(px+10), float64(ty))
 	hin.ColorScale.ScaleWithColor(color.RGBA{0x88, 0x90, 0xa8, 0xff})
 	textv2.Draw(screen, "C — скрыть / показать панель", hintFace, hin)

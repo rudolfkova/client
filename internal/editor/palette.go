@@ -139,6 +139,15 @@ func (a *App) maxPaletteScroll() int {
 		}
 		return h - avail
 	}
+	if a.pickCatalog {
+		n := len(a.catalogInteractIDs)
+		h := n * rowH
+		avail := a.gridBottom() - paletteGridTop()
+		if h <= avail {
+			return 0
+		}
+		return h - avail
+	}
 	keys := tiles.EditorSingleTextureKeys()
 	h := len(keys) * rowH
 	avail := a.gridBottom() - paletteGridTop()
@@ -242,19 +251,31 @@ func (a *App) handlePaletteClick(mx, my int) bool {
 		return true
 	}
 
-	// Вкладки
+	// Вкладки (три колонки)
 	yTabs := paletteYTabs()
-	half := (pw - 2*pad) / 2
-	if inRect(mx, my, px+pad, yTabs, half, tabH) {
+	tabW := (pw - 2*pad) / 3
+	tabRest := pw - 2*pad - 2*tabW
+	if inRect(mx, my, px+pad, yTabs, tabW, tabH) {
 		a.pickTilesets = true
+		a.pickCatalog = false
 		a.clampTileIdx()
 		a.paletteScroll, a.paletteScrollX = 0, 0
 		a.clampScroll()
 		return true
 	}
-	if inRect(mx, my, px+pad+half, yTabs, pw-2*pad-half, tabH) {
+	if inRect(mx, my, px+pad+tabW, yTabs, tabW, tabH) {
 		a.pickTilesets = false
+		a.pickCatalog = false
 		a.clampSingleIdx()
+		a.paletteScroll, a.paletteScrollX = 0, 0
+		a.clampScroll()
+		return true
+	}
+	if inRect(mx, my, px+pad+2*tabW, yTabs, tabRest, tabH) {
+		a.pickTilesets = false
+		a.pickCatalog = true
+		a.clampCatItemIdx()
+		a.editLayer = catalogItemLayer
 		a.paletteScroll, a.paletteScrollX = 0, 0
 		a.clampScroll()
 		return true
@@ -301,6 +322,22 @@ func (a *App) handlePaletteClick(mx, my int) bool {
 		i := row*cols + col
 		if i >= 0 && i < n {
 			a.tileIdx = i
+		}
+		return true
+	}
+
+	if a.pickCatalog {
+		n := len(a.catalogInteractIDs)
+		if n <= 0 {
+			return true
+		}
+		relY := my - paletteGridTop() + a.paletteScroll
+		if relY < 0 {
+			return true
+		}
+		i := relY / rowH
+		if i >= 0 && i < n {
+			a.catItemIdx = i
 		}
 		return true
 	}
@@ -399,24 +436,31 @@ func (a *App) drawPalette(dst *ebiten.Image) {
 	textv2.Draw(dst, btxt, face, opts)
 
 	yTabs := float32(paletteYTabs())
-	half := float32(a.paletteWidth-2*pad) / 2
+	tabW := float32(a.paletteWidth-2*pad) / 3
+	tabRest := float32(a.paletteWidth-2*pad) - 2*tabW
 	tabHi := color.RGBA{0x38, 0x38, 0x48, 0xff}
 	tabLo := color.RGBA{0x24, 0x24, 0x2e, 0xff}
-	leftCol, rightCol := tabLo, tabLo
+	c0, c1, c2 := tabLo, tabLo, tabLo
 	if a.pickTilesets {
-		leftCol = tabHi
+		c0 = tabHi
+	} else if a.pickCatalog {
+		c2 = tabHi
 	} else {
-		rightCol = tabHi
+		c1 = tabHi
 	}
-	vector.DrawFilledRect(dst, px+pad, yTabs, half, float32(tabH), leftCol, false)
-	vector.DrawFilledRect(dst, px+pad+half, yTabs, float32(a.paletteWidth-2*pad)-half, float32(tabH), rightCol, false)
+	vector.DrawFilledRect(dst, px+pad, yTabs, tabW, float32(tabH), c0, false)
+	vector.DrawFilledRect(dst, px+pad+tabW, yTabs, tabW, float32(tabH), c1, false)
+	vector.DrawFilledRect(dst, px+pad+2*tabW, yTabs, tabRest, float32(tabH), c2, false)
 	opts = &textv2.DrawOptions{}
 	opts.ColorScale.ScaleWithColor(color.RGBA{0xee, 0xee, 0xf0, 0xff})
-	opts.GeoM.Translate(float64(px+pad+8), float64(yTabs+4))
+	opts.GeoM.Translate(float64(px+pad+6), float64(yTabs+4))
 	textv2.Draw(dst, "Наборы", face, opts)
 	opts.GeoM.Reset()
-	opts.GeoM.Translate(float64(px+pad+half+8), float64(yTabs+4))
-	textv2.Draw(dst, "Отдельные", face, opts)
+	opts.GeoM.Translate(float64(px+pad+tabW+4), float64(yTabs+4))
+	textv2.Draw(dst, "Отдел.", face, opts)
+	opts.GeoM.Reset()
+	opts.GeoM.Translate(float64(px+pad+2*tabW+4), float64(yTabs+4))
+	textv2.Draw(dst, "Предметы", face, opts)
 
 	ySet := float32(paletteYSetRow())
 	if a.pickTilesets {
@@ -439,6 +483,20 @@ func (a *App) drawPalette(dst *ebiten.Image) {
 		opts.GeoM.Translate(float64(px+float32(a.paletteWidth)/2), float64(ySet+4))
 		opts.ColorScale.ScaleWithColor(color.RGBA{0xd0, 0xd0, 0xd8, 0xff})
 		textv2.Draw(dst, setName, small, opts)
+	} else if a.pickCatalog {
+		opts = &textv2.DrawOptions{}
+		opts.PrimaryAlign = textv2.AlignCenter
+		opts.GeoM.Translate(float64(px+float32(a.paletteWidth)/2), float64(ySet+4))
+		opts.ColorScale.ScaleWithColor(color.RGBA{0xc8, 0xd8, 0xf0, 0xff})
+		line := "каталог · слой 1"
+		if len(a.catalogInteractIDs) > 0 {
+			id := a.catalogInteractIDs[a.catItemIdx]
+			if len(id) > 28 {
+				id = id[:25] + "…"
+			}
+			line = id + " · interact"
+		}
+		textv2.Draw(dst, line, small, opts)
 	} else {
 		opts = &textv2.DrawOptions{}
 		opts.ColorScale.ScaleWithColor(color.RGBA{0x88, 0x88, 0x98, 0xff})
@@ -485,6 +543,34 @@ func (a *App) drawPalette(dst *ebiten.Image) {
 				vector.StrokeRect(dst, cx-1, cy-1, float32(thumbSize)+2, float32(thumbSize)+2, 2, color.RGBA{0xff, 0xcc, 0x33, 0xff}, false)
 			}
 		}
+	} else if a.pickCatalog {
+		for i, id := range a.catalogInteractIDs {
+			cy := gy0 + float32(i*rowH) - float32(a.paletteScroll)
+			if cy+float32(rowH-4) < gy0 || cy > gy0+gh {
+				continue
+			}
+			cx := px + float32(pad)
+			tsz := float32(thumbSize)
+			vector.DrawFilledRect(dst, cx, cy+4, tsz, tsz, color.RGBA{0x2a, 0x32, 0x40, 0xff}, false)
+			img := tiles.ImageForTexture(id)
+			if img != nil {
+				w, h0 := img.Bounds().Dx(), img.Bounds().Dy()
+				op := &ebiten.DrawImageOptions{}
+				if w > 0 && h0 > 0 {
+					op.GeoM.Scale(float64(tsz)/float64(w), float64(tsz)/float64(h0))
+				}
+				op.GeoM.Translate(float64(cx), float64(cy+4))
+				dst.DrawImage(img, op)
+			}
+			opts = &textv2.DrawOptions{}
+			opts.ColorScale.ScaleWithColor(color.RGBA{0xcc, 0xd8, 0xf0, 0xff})
+			opts.GeoM.Translate(float64(cx+tsz+8), float64(cy+10))
+			textv2.Draw(dst, id, face, opts)
+			if i == a.catItemIdx {
+				rw := float32(a.paletteWidth - 2*pad + 2)
+				vector.StrokeRect(dst, cx-1, cy+3, rw, float32(thumbSize)+2, 2, color.RGBA{0xff, 0xcc, 0x33, 0xff}, false)
+			}
+		}
 	} else {
 		keys := tiles.EditorSingleTextureKeys()
 		for i, key := range keys {
@@ -521,5 +607,5 @@ func (a *App) mapTileFromCursor(mx, my int) (tx, ty int, ok bool) {
 	if mx >= a.paletteX() {
 		return 0, 0, false
 	}
-	return world.TileFromScreenWithCam(mx, my, a.camX, a.camY)
+	return world.TileFromScreenWithCamZoom(mx, my, a.camX, a.camY, a.camZoomEffective())
 }

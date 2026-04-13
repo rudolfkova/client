@@ -29,9 +29,18 @@ func TileFromScreen(mx, my int) (tx, ty int, ok bool) {
 
 // TileFromScreenWithCam — то же с учётом смещения камеры (мир в px: +cam = сдвиг взгляда вправо/вниз).
 func TileFromScreenWithCam(mx, my int, camX, camY float32) (tx, ty int, ok bool) {
-	fx := float32(mx) + camX
-	fy := float32(my) + camY
-	// Floor, как для положительных координат, так и для отрицательных (int отрицательной дроби в Go — к нулю, не к −∞).
+	return TileFromScreenWithCamZoom(mx, my, camX, camY, 1)
+}
+
+// TileFromScreenWithCamZoom — как TileFromScreenWithCam, но экранные координаты делятся на zoom
+// (тайлы рисуются как (мир − cam) * zoom). При zoom ≤ 0 используется 1.
+func TileFromScreenWithCamZoom(mx, my int, camX, camY, zoom float32) (tx, ty int, ok bool) {
+	z := zoom
+	if z <= 0 {
+		z = 1
+	}
+	fx := float32(mx)/z + camX
+	fy := float32(my)/z + camY
 	tx = int(math.Floor(float64(fx-float32(GridPad)) / float64(TileSize)))
 	ty = int(math.Floor(float64(fy-float32(GridPad)) / float64(TileSize)))
 	return tx, ty, true

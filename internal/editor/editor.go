@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"image/color"
 	"log"
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -17,7 +18,9 @@ import (
 	"github.com/hajimehoshi/ebiten/v2/vector"
 	"github.com/rudolfkova/grpc_auth/pkg/gamekit"
 
+	"client/data"
 	"client/internal/gamews"
+	"client/internal/gamecontent"
 	"client/internal/state"
 	"client/internal/tiles"
 	"client/internal/ui"
@@ -32,6 +35,12 @@ const (
 	maxSaveNameRunes = 120
 	saveToastDur     = 7 * time.Second
 	cameraPanSpeed   = float32(14) // px за кадр при удержании стрелки
+	// catalogItemLayer — слой «предметов на земле» (как в игре: < playerTileLayer).
+	catalogItemLayer = 1
+
+	camZoomMin = float32(0.25)
+	camZoomMax       = float32(4)
+	camZoomWheelStep = float32(1.09) // множитель за единицу Wheel() по Y
 )
 
 // App — клиент редактора мира: spawn_tile по клику, превью состояния с game WS.
@@ -46,7 +55,10 @@ type App struct {
 	blocks   bool
 
 	pickTilesets   bool // true: тайлсеты из assets/tileSets, false: корневые PNG в assets/
-	singleIdx      int
+	pickCatalog    bool // вкладка «Предметы»: spawn_tile texture=id из catalog, слой catalogItemLayer
+	catalogInteractIDs []string
+	catItemIdx           int
+	singleIdx            int
 	paletteScroll  int // вертикаль сетки палитры
 	paletteScrollX int // горизонталь (если сетка шире панели)
 	paletteWidth   int // ширина панели палитры (правая колонка); край — тянуть
@@ -54,7 +66,8 @@ type App struct {
 	paletteDragX   int
 	winW, winH     int
 
-	camX, camY float32 // камера: мир сдвигается на экране (px)
+	camX, camY   float32 // камера: мир в «логических» px до масштаба
+	camZoom      float32 // только редактор: экран = (мир − cam) * camZoom
 
 	editLayer    int // слой spawn_tile / clear_tile
 	editRotation int // четверти по часовой, 0..3
@@ -76,6 +89,13 @@ type App struct {
 	rectEraseDrag    bool
 	rectEX0, rectEY0 int
 	rectEX1, rectEY1 int
+
+	spawnArgsOpen            bool
+	spawnArgsPX, spawnArgsPY int
+	spawnArgsDraft           string
+	spawnArgsErr             string
+	spawnArgsCursor          int // байтовое смещение в spawnArgsDraft
+	spawnArgsFirstLine       int // первая видимая строка (для длинного JSON)
 }
 
 func New(wsGame *websocket.Conn, msgs <-chan gamekit.Envelope) *App {
@@ -88,21 +108,24 @@ func New(wsGame *websocket.Conn, msgs <-chan gamekit.Envelope) *App {
 			break
 		}
 	}
+	catIDs := gamecontent.InteractItemIDs(data.ContentCatalogJSON)
 	return &App{
-		wsGame:       wsGame,
-		msgs:         msgs,
-		World:        state.NewWorld(),
-		setNames:     sets,
-		setIdx:       si,
-		tileIdx:      0,
-		blocks:       true,
-		pickTilesets: true,
-		singleIdx:    0,
+		wsGame:               wsGame,
+		msgs:                 msgs,
+		World:                state.NewWorld(),
+		setNames:             sets,
+		setIdx:               si,
+		tileIdx:              0,
+		blocks:               true,
+		pickTilesets:         true,
+		catalogInteractIDs:   catIDs,
+		singleIdx:            0,
 		paletteWidth: paletteMinW,
 		winW:         WindowWidth,
 		winH:         WindowHeight,
 		editLayer:    0,
 		editRotation: 0,
+		camZoom:      1,
 	}
 }
 
@@ -130,6 +153,22 @@ func (a *App) ctrlHeld() bool {
 	return ebiten.IsKeyPressed(ebiten.KeyControlLeft) || ebiten.IsKeyPressed(ebiten.KeyControlRight)
 }
 
+func (a *App) sendSpawnCatalog(tx, ty int, instanceArgs json.RawMessage) {
+	id := a.texture()
+	if id == "" || id == "wall" {
+		return
+	}
+	intent := gamekit.TileSpawnIntent{
+		X: tx, Y: ty, Layer: catalogItemLayer, Rotation: 0, Texture: id, Blocks: false,
+	}
+	if len(instanceArgs) > 0 {
+		intent.InstanceArgs = instanceArgs
+	}
+	if err := gamews.Send(a.wsGame, gamekit.TypeSpawnTile, intent); err != nil {
+		log.Printf("editor spawn_tile: %v", err)
+	}
+}
+
 func (a *App) sendSpawn(tx, ty int) {
 	intent := gamekit.TileSpawnIntent{
 		X:        tx,
@@ -155,7 +194,11 @@ func (a *App) fillSpawnRect(x0, y0, x1, y1 int) {
 }
 
 func (a *App) sendClear(tx, ty int) {
-	cl := gamekit.TileClearIntent{X: tx, Y: ty, Layer: a.editLayer}
+	layer := a.editLayer
+	if a.pickCatalog {
+		layer = catalogItemLayer
+	}
+	cl := gamekit.TileClearIntent{X: tx, Y: ty, Layer: layer}
 	if err := gamews.Send(a.wsGame, gamekit.TypeClearTile, cl); err != nil {
 		log.Printf("editor clear_tile: %v", err)
 	}
@@ -174,14 +217,45 @@ func (a *App) fillClearRect(x0, y0, x1, y1 int) {
 func (a *App) drawTileRectSel(screen *ebiten.Image, x0, y0, x1, y1 int, fill, stroke color.RGBA) {
 	xa, xb := min(x0, x1), max(x0, x1)
 	ya, yb := min(y0, y1), max(y0, y1)
+	z := a.camZoomEffective()
 	ts := float32(world.TileSize)
 	gp := float32(world.GridPad)
-	fx := gp + float32(xa)*ts - a.camX
-	fy := gp + float32(ya)*ts - a.camY
-	fw := float32(xb-xa+1) * ts
-	fh := float32(yb-ya+1) * ts
+	fx := (gp + float32(xa)*ts - a.camX) * z
+	fy := (gp + float32(ya)*ts - a.camY) * z
+	fw := float32(xb-xa+1) * ts * z
+	fh := float32(yb-ya+1) * ts * z
 	vector.DrawFilledRect(screen, fx, fy, fw, fh, fill, false)
-	vector.StrokeRect(screen, fx, fy, fw, fh, 2, stroke, false)
+	st := float32(2) * z
+	if st < 1 {
+		st = 1
+	}
+	vector.StrokeRect(screen, fx, fy, fw, fh, st, stroke, false)
+}
+
+func (a *App) camZoomEffective() float32 {
+	if a.camZoom <= 0 {
+		return 1
+	}
+	return a.camZoom
+}
+
+// applyZoomToward оставляет ту же мир-точку под курсором (mx, my) после смены масштаба.
+func (a *App) applyZoomToward(mx, my int, newZoom float32) {
+	if newZoom < camZoomMin {
+		newZoom = camZoomMin
+	}
+	if newZoom > camZoomMax {
+		newZoom = camZoomMax
+	}
+	z0 := a.camZoomEffective()
+	if newZoom == z0 {
+		return
+	}
+	wx := float32(mx)/z0 + a.camX
+	wy := float32(my)/z0 + a.camY
+	a.camZoom = newZoom
+	a.camX = wx - float32(mx)/newZoom
+	a.camY = wy - float32(my)/newZoom
 }
 
 func (a *App) currentSet() string {
@@ -210,6 +284,20 @@ func (a *App) clampTileIdx() {
 	}
 }
 
+func (a *App) clampCatItemIdx() {
+	n := len(a.catalogInteractIDs)
+	if n <= 0 {
+		a.catItemIdx = 0
+		return
+	}
+	if a.catItemIdx >= n {
+		a.catItemIdx = n - 1
+	}
+	if a.catItemIdx < 0 {
+		a.catItemIdx = 0
+	}
+}
+
 func (a *App) clampSingleIdx() {
 	keys := tiles.EditorSingleTextureKeys()
 	if len(keys) == 0 {
@@ -225,6 +313,13 @@ func (a *App) clampSingleIdx() {
 }
 
 func (a *App) texture() string {
+	if a.pickCatalog {
+		if len(a.catalogInteractIDs) == 0 {
+			return "wall"
+		}
+		a.clampCatItemIdx()
+		return a.catalogInteractIDs[a.catItemIdx]
+	}
 	if !a.pickTilesets {
 		keys := tiles.EditorSingleTextureKeys()
 		if len(keys) == 0 {
@@ -310,6 +405,40 @@ func (a *App) Update() error {
 		a.saveToast = ""
 	}
 
+	if a.spawnArgsOpen {
+		if inpututil.IsKeyJustPressed(ebiten.KeyEscape) {
+			a.spawnArgsOpen = false
+			a.spawnArgsErr = ""
+			return nil
+		}
+		mx, my := ebiten.CursorPosition()
+		if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) {
+			if a.spawnModalCancelHit(mx, my) {
+				a.spawnArgsOpen = false
+				a.spawnArgsErr = ""
+				return nil
+			}
+			if a.spawnModalOKHit(mx, my) {
+				a.confirmSpawnArgsModal()
+				return nil
+			}
+		}
+		if inpututil.IsKeyJustPressed(ebiten.KeyEnter) {
+			if ebiten.IsKeyPressed(ebiten.KeyShiftLeft) || ebiten.IsKeyPressed(ebiten.KeyShiftRight) {
+				a.spawnArgsInsert("\n")
+				a.spawnArgsErr = ""
+				a.spawnArgsScrollToCursor()
+			} else {
+				a.confirmSpawnArgsModal()
+			}
+			return nil
+		}
+		if ebiten.IsFocused() {
+			a.tickSpawnArgsModalInput()
+		}
+		return nil
+	}
+
 	if a.savePanelOpen {
 		if inpututil.IsKeyJustPressed(ebiten.KeyF2) {
 			a.savePanelOpen = false
@@ -360,6 +489,12 @@ func (a *App) Update() error {
 	}
 
 	a.handlePaletteScroll(mx, my, wx, wy)
+	// Колёсико над картой (слева от палитры): масштаб к курсору.
+	if pxEdge > 0 && wy != 0 && mx >= 0 && mx < pxEdge && my >= 0 && my < a.winH {
+		z0 := a.camZoomEffective()
+		f := float32(math.Pow(float64(camZoomWheelStep), -wy))
+		a.applyZoomToward(mx, my, z0*f)
+	}
 
 	if inpututil.IsKeyJustPressed(ebiten.KeyF2) {
 		a.savePanelOpen = true
@@ -412,6 +547,16 @@ func (a *App) Update() error {
 			a.nextSet(1)
 			a.paletteScroll, a.paletteScrollX = 0, 0
 		}
+	} else if a.pickCatalog {
+		n := len(a.catalogInteractIDs)
+		if n > 0 {
+			if inpututil.IsKeyJustPressed(ebiten.KeyArrowLeft) || inpututil.IsKeyJustPressed(ebiten.KeyArrowUp) {
+				a.catItemIdx = (a.catItemIdx - 1 + n) % n
+			}
+			if inpututil.IsKeyJustPressed(ebiten.KeyArrowRight) || inpututil.IsKeyJustPressed(ebiten.KeyArrowDown) {
+				a.catItemIdx = (a.catItemIdx + 1) % n
+			}
+		}
 	} else {
 		keys := tiles.EditorSingleTextureKeys()
 		n := len(keys)
@@ -422,6 +567,16 @@ func (a *App) Update() error {
 			if inpututil.IsKeyJustPressed(ebiten.KeyArrowRight) || inpututil.IsKeyJustPressed(ebiten.KeyArrowDown) {
 				a.singleIdx = (a.singleIdx + 1) % n
 			}
+		}
+	}
+	if pxEdge > 0 {
+		if inpututil.IsKeyJustPressed(ebiten.KeyEqual) || inpututil.IsKeyJustPressed(ebiten.KeyNumpadAdd) {
+			mxC, myC := pxEdge/2, a.winH/2
+			a.applyZoomToward(mxC, myC, a.camZoomEffective()*camZoomWheelStep)
+		}
+		if inpututil.IsKeyJustPressed(ebiten.KeyMinus) || inpututil.IsKeyJustPressed(ebiten.KeyNumpadSubtract) {
+			mxC, myC := pxEdge/2, a.winH/2
+			a.applyZoomToward(mxC, myC, a.camZoomEffective()/camZoomWheelStep)
 		}
 	}
 	ctrl := a.ctrlHeld()
@@ -446,9 +601,13 @@ func (a *App) Update() error {
 		if !a.handlePaletteClick(mx, my) {
 			if tx, ty, ok := a.mapTileFromCursor(mx, my); ok {
 				if ctrl {
-					a.rectDrag = true
-					a.rectX0, a.rectY0 = tx, ty
-					a.rectX1, a.rectY1 = tx, ty
+					if !a.pickCatalog {
+						a.rectDrag = true
+						a.rectX0, a.rectY0 = tx, ty
+						a.rectX1, a.rectY1 = tx, ty
+					}
+				} else if a.pickCatalog {
+					a.openSpawnArgsModal(tx, ty)
 				} else {
 					a.sendSpawn(tx, ty)
 					a.paintHave = true
@@ -463,7 +622,7 @@ func (a *App) Update() error {
 				if a.rectDrag {
 					a.rectX1, a.rectY1 = tx, ty
 				}
-			} else if a.paintHave {
+			} else if a.paintHave && !a.pickCatalog {
 				if tx != a.paintNX || ty != a.paintNY {
 					a.sendSpawn(tx, ty)
 					a.paintNX, a.paintNY = tx, ty
@@ -516,12 +675,12 @@ func (a *App) Draw(screen *ebiten.Image) {
 		}
 		return x.Layer - y.Layer
 	})
-	camOpts := tiles.DrawOpts{OutlineBlocking: true, CamX: a.camX, CamY: a.camY}
+	camOpts := tiles.DrawOpts{OutlineBlocking: true, CamX: a.camX, CamY: a.camY, CamZoom: a.camZoom}
 	for _, t := range tileList {
 		tiles.Draw(screen, t, camOpts)
 	}
 
-	if !a.savePanelOpen {
+	if !a.savePanelOpen && !a.spawnArgsOpen {
 		cmx, cmy := ebiten.CursorPosition()
 		if !a.inPalette(cmx, cmy) {
 			if a.rectDrag {
@@ -546,27 +705,34 @@ func (a *App) Draw(screen *ebiten.Image) {
 		ids = append(ids, id)
 	}
 	slices.Sort(ids)
-	face := &textv2.GoTextFace{Source: ui.FontSource(), Size: world.LabelTextSize}
+	z := a.camZoomEffective()
+	face := &textv2.GoTextFace{Source: ui.FontSource(), Size: world.LabelTextSize * float64(z)}
 	for _, id := range ids {
 		pl := a.World.Players[id]
 		cx, cy := world.ToScreen(pl.X, pl.Y)
-		cx -= a.camX
-		cy -= a.camY
+		sx := (cx - a.camX) * z
+		sy := (cy - a.camY) * z
+		pr := world.PlayerRadius * z
 		fill := playerColor(id)
-		vector.DrawFilledCircle(screen, cx, cy, world.PlayerRadius, fill, true)
-		vector.StrokeCircle(screen, cx, cy, world.PlayerRadius, 1.5, color.RGBA{0xff, 0xff, 0xff, 0x90}, true)
+		vector.DrawFilledCircle(screen, sx, sy, pr, fill, true)
+		stk := float32(1.5) * z
+		if stk < 1 {
+			stk = 1
+		}
+		vector.StrokeCircle(screen, sx, sy, pr, stk, color.RGBA{0xff, 0xff, 0xff, 0x90}, true)
 		label := fmt.Sprintf("%d", pl.HP)
 		opts := &textv2.DrawOptions{}
 		opts.PrimaryAlign = textv2.AlignCenter
 		opts.SecondaryAlign = textv2.AlignEnd
-		opts.GeoM.Translate(float64(cx), float64(cy)-world.PlayerRadius-world.LabelAboveGap)
+		gap := world.LabelAboveGap * z
+		opts.GeoM.Translate(float64(sx), float64(sy-pr-gap))
 		opts.ColorScale.ScaleWithColor(color.RGBA{0xff, 0xff, 0xff, 0xff})
 		textv2.Draw(screen, label, face, opts)
 	}
 
 	a.drawPalette(screen)
 
-	line1 := "Стрелки — камера · Shift+стрелки — палитра · над сеткой: колёсико / Shift+колёсико вбок · ЛКМ кисть · Ctrl+ЛКМ заливка · ПКМ стереть · край палитры — ширина · F2 сохранить · , . слой · R поворот"
+	line1 := "Стрелки — камера · Shift+стрелки — палитра · над картой: колёсико — масштаб · +/- — масштаб к центру · над сеткой палитры: колёсико / Shift+колёсико вбок · ЛКМ кисть · Ctrl+ЛКМ заливка (не «Предметы») · ПКМ стереть · «Предметы»: ЛКМ — окно instance_args · край палитры — ширина · F2 сохранить · , . слой · R поворот"
 	hudFace := &textv2.GoTextFace{Source: ui.FontSource(), Size: 14}
 	hudOpts := &textv2.DrawOptions{}
 	hudOpts.ColorScale.ScaleWithColor(color.RGBA{0xf0, 0xf0, 0xf0, 0xff})
@@ -590,9 +756,321 @@ func (a *App) Draw(screen *ebiten.Image) {
 		textv2.Draw(screen, s, toastFace, toastOpts)
 	}
 
+	if a.spawnArgsOpen {
+		a.drawSpawnArgsModal(screen)
+	}
 	if a.savePanelOpen {
 		a.drawSavePanel(screen)
 	}
+}
+
+const (
+	spawnModalBW          = 580
+	spawnModalBH          = 320
+	spawnModalMaxVisLines = 16
+)
+
+func spawnByteToLineCol(s string, b int) (line, col int) {
+	if b < 0 {
+		return 0, 0
+	}
+	if b > len(s) {
+		b = len(s)
+	}
+	prefix := s[:b]
+	line = strings.Count(prefix, "\n")
+	nl := strings.LastIndex(prefix, "\n")
+	if nl < 0 {
+		col = len(prefix)
+	} else {
+		col = len(prefix) - nl - 1
+	}
+	return line, col
+}
+
+func spawnLineColToByte(s string, line, col int) int {
+	lines := strings.Split(s, "\n")
+	if len(lines) == 0 {
+		return 0
+	}
+	if line < 0 {
+		line = 0
+	}
+	if line >= len(lines) {
+		line = len(lines) - 1
+	}
+	off := 0
+	for i := 0; i < line; i++ {
+		off += len(lines[i]) + 1
+	}
+	ln := lines[line]
+	if col < 0 {
+		col = 0
+	}
+	if col > len(ln) {
+		col = len(ln)
+	}
+	return off + col
+}
+
+func spawnCursorByteLeft(s string, b int) int {
+	if b <= 0 {
+		return 0
+	}
+	_, sz := utf8.DecodeLastRuneInString(s[:b])
+	return b - sz
+}
+
+func spawnCursorByteRight(s string, b int) int {
+	if b >= len(s) {
+		return len(s)
+	}
+	_, sz := utf8.DecodeRuneInString(s[b:])
+	return b + sz
+}
+
+func (a *App) spawnModalBox() (bx, by int) {
+	bx = (a.winW - spawnModalBW) / 2
+	by = (a.winH - spawnModalBH) / 2
+	return bx, by
+}
+
+func (a *App) spawnModalOKHit(mx, my int) bool {
+	bx, by := a.spawnModalBox()
+	return inRect(mx, my, bx+spawnModalBW-130, by+spawnModalBH-48, 110, 32)
+}
+
+func (a *App) spawnModalCancelHit(mx, my int) bool {
+	bx, by := a.spawnModalBox()
+	return inRect(mx, my, bx+20, by+spawnModalBH-48, 110, 32)
+}
+
+func (a *App) openSpawnArgsModal(tx, ty int) {
+	a.spawnArgsPX, a.spawnArgsPY = tx, ty
+	a.spawnArgsDraft = gamecontent.EditorInstanceArgsDraft(data.ContentCatalogJSON, a.texture())
+	a.spawnArgsErr = ""
+	a.spawnArgsOpen = true
+	a.spawnArgsCursor = len(a.spawnArgsDraft)
+	a.spawnArgsFirstLine = 0
+}
+
+func (a *App) confirmSpawnArgsModal() {
+	raw, errMsg := gamecontent.ParseAndNormalizeInstanceArgsText(a.spawnArgsDraft)
+	if errMsg != "" {
+		a.spawnArgsErr = errMsg
+		return
+	}
+	a.sendSpawnCatalog(a.spawnArgsPX, a.spawnArgsPY, raw)
+	a.spawnArgsOpen = false
+	a.spawnArgsErr = ""
+}
+
+func (a *App) clampSpawnArgsCursor() {
+	if a.spawnArgsCursor < 0 {
+		a.spawnArgsCursor = 0
+	}
+	if a.spawnArgsCursor > len(a.spawnArgsDraft) {
+		a.spawnArgsCursor = len(a.spawnArgsDraft)
+	}
+}
+
+func (a *App) spawnArgsScrollToCursor() {
+	lines := strings.Split(a.spawnArgsDraft, "\n")
+	maxFirst := 0
+	if len(lines) > spawnModalMaxVisLines {
+		maxFirst = len(lines) - spawnModalMaxVisLines
+	}
+	if a.spawnArgsFirstLine > maxFirst {
+		a.spawnArgsFirstLine = maxFirst
+	}
+	if a.spawnArgsFirstLine < 0 {
+		a.spawnArgsFirstLine = 0
+	}
+
+	line, _ := spawnByteToLineCol(a.spawnArgsDraft, a.spawnArgsCursor)
+	if line < a.spawnArgsFirstLine {
+		a.spawnArgsFirstLine = line
+	}
+	if line >= a.spawnArgsFirstLine+spawnModalMaxVisLines {
+		a.spawnArgsFirstLine = line - spawnModalMaxVisLines + 1
+	}
+	if a.spawnArgsFirstLine < 0 {
+		a.spawnArgsFirstLine = 0
+	}
+}
+
+func (a *App) spawnArgsInsert(s string) {
+	a.clampSpawnArgsCursor()
+	if len(a.spawnArgsDraft)+len(s) > 120000 {
+		return
+	}
+	a.spawnArgsDraft = a.spawnArgsDraft[:a.spawnArgsCursor] + s + a.spawnArgsDraft[a.spawnArgsCursor:]
+	a.spawnArgsCursor += len(s)
+}
+
+func (a *App) spawnArgsDeleteForward() {
+	a.clampSpawnArgsCursor()
+	if a.spawnArgsCursor >= len(a.spawnArgsDraft) {
+		return
+	}
+	_, sz := utf8.DecodeRuneInString(a.spawnArgsDraft[a.spawnArgsCursor:])
+	a.spawnArgsDraft = a.spawnArgsDraft[:a.spawnArgsCursor] + a.spawnArgsDraft[a.spawnArgsCursor+sz:]
+}
+
+func (a *App) tickSpawnArgsModalInput() {
+	a.clampSpawnArgsCursor()
+
+	if inpututil.IsKeyJustPressed(ebiten.KeyArrowLeft) {
+		a.spawnArgsCursor = spawnCursorByteLeft(a.spawnArgsDraft, a.spawnArgsCursor)
+		a.spawnArgsScrollToCursor()
+	}
+	if inpututil.IsKeyJustPressed(ebiten.KeyArrowRight) {
+		a.spawnArgsCursor = spawnCursorByteRight(a.spawnArgsDraft, a.spawnArgsCursor)
+		a.spawnArgsScrollToCursor()
+	}
+	if inpututil.IsKeyJustPressed(ebiten.KeyArrowUp) {
+		line, col := spawnByteToLineCol(a.spawnArgsDraft, a.spawnArgsCursor)
+		if line > 0 {
+			a.spawnArgsCursor = spawnLineColToByte(a.spawnArgsDraft, line-1, col)
+		}
+		a.spawnArgsScrollToCursor()
+	}
+	if inpututil.IsKeyJustPressed(ebiten.KeyArrowDown) {
+		line, col := spawnByteToLineCol(a.spawnArgsDraft, a.spawnArgsCursor)
+		lines := strings.Split(a.spawnArgsDraft, "\n")
+		if line < len(lines)-1 {
+			a.spawnArgsCursor = spawnLineColToByte(a.spawnArgsDraft, line+1, col)
+		}
+		a.spawnArgsScrollToCursor()
+	}
+	if inpututil.IsKeyJustPressed(ebiten.KeyHome) {
+		line, _ := spawnByteToLineCol(a.spawnArgsDraft, a.spawnArgsCursor)
+		a.spawnArgsCursor = spawnLineColToByte(a.spawnArgsDraft, line, 0)
+		a.spawnArgsScrollToCursor()
+	}
+	if inpututil.IsKeyJustPressed(ebiten.KeyEnd) {
+		line, _ := spawnByteToLineCol(a.spawnArgsDraft, a.spawnArgsCursor)
+		lines := strings.Split(a.spawnArgsDraft, "\n")
+		endCol := 0
+		if line < len(lines) {
+			endCol = len(lines[line])
+		}
+		a.spawnArgsCursor = spawnLineColToByte(a.spawnArgsDraft, line, endCol)
+		a.spawnArgsScrollToCursor()
+	}
+	if inpututil.IsKeyJustPressed(ebiten.KeyBackspace) {
+		if a.spawnArgsCursor > 0 {
+			_, sz := utf8.DecodeLastRuneInString(a.spawnArgsDraft[:a.spawnArgsCursor])
+			a.spawnArgsDraft = a.spawnArgsDraft[:a.spawnArgsCursor-sz] + a.spawnArgsDraft[a.spawnArgsCursor:]
+			a.spawnArgsCursor -= sz
+			a.spawnArgsErr = ""
+		}
+	}
+	if inpututil.IsKeyJustPressed(ebiten.KeyDelete) {
+		a.spawnArgsDeleteForward()
+		a.spawnArgsErr = ""
+	}
+
+	for _, ch := range ebiten.AppendInputChars(nil) {
+		if ch == '\n' || ch == '\r' {
+			continue
+		}
+		a.spawnArgsInsert(string(ch))
+		a.spawnArgsErr = ""
+	}
+	a.spawnArgsScrollToCursor()
+}
+
+func (a *App) drawSpawnArgsModal(screen *ebiten.Image) {
+	w, h := float32(a.winW), float32(a.winH)
+	vector.DrawFilledRect(screen, 0, 0, w, h, color.RGBA{0x10, 0x10, 0x18, 0xc4}, false)
+
+	ibx, iby := a.spawnModalBox()
+	bx, by := float32(ibx), float32(iby)
+	bw, bh := float32(spawnModalBW), float32(spawnModalBH)
+	vector.DrawFilledRect(screen, bx, by, bw, bh, color.RGBA{0x28, 0x28, 0x34, 0xff}, false)
+	vector.StrokeRect(screen, bx, by, bw, bh, 1.5, color.RGBA{0x66, 0x66, 0x80, 0xff}, false)
+
+	face := &textv2.GoTextFace{Source: ui.FontSource(), Size: 15}
+	small := &textv2.GoTextFace{Source: ui.FontSource(), Size: 12}
+	mono := &textv2.GoTextFace{Source: ui.FontSource(), Size: 11}
+
+	title := fmt.Sprintf("instance_args · (%d,%d) · %s", a.spawnArgsPX, a.spawnArgsPY, a.texture())
+	opts := &textv2.DrawOptions{}
+	opts.ColorScale.ScaleWithColor(color.RGBA{0xee, 0xee, 0xf5, 0xff})
+	opts.GeoM.Translate(float64(bx+14), float64(by+10))
+	textv2.Draw(screen, title, face, opts)
+
+	if a.spawnArgsErr != "" {
+		em := a.spawnArgsErr
+		if utf8.RuneCountInString(em) > 120 {
+			em = string([]rune(em)[:117]) + "…"
+		}
+		opts.GeoM.Reset()
+		opts.GeoM.Translate(float64(bx+14), float64(by+36))
+		opts.ColorScale.ScaleWithColor(color.RGBA{0xff, 0xa8, 0x88, 0xff})
+		textv2.Draw(screen, em, small, opts)
+	}
+
+	allLines := strings.Split(a.spawnArgsDraft, "\n")
+	fl := a.spawnArgsFirstLine
+	if fl < 0 {
+		fl = 0
+	}
+	if fl >= len(allLines) && len(allLines) > 0 {
+		fl = len(allLines) - 1
+	}
+	end := fl + spawnModalMaxVisLines
+	if end > len(allLines) {
+		end = len(allLines)
+	}
+	visible := allLines[fl:end]
+
+	var caretX, caretY float32 = -1, -1
+	curLine, curCol := spawnByteToLineCol(a.spawnArgsDraft, a.spawnArgsCursor)
+	if curLine >= fl && curLine < fl+len(visible) {
+		rel := curLine - fl
+		ln := allLines[curLine]
+		prefix := ln
+		if curCol < len(prefix) {
+			prefix = prefix[:curCol]
+		} else {
+			prefix = ln
+		}
+		w, _ := textv2.Measure(prefix, mono, 0)
+		caretX = bx + 14 + float32(w)
+		caretY = by + 58 + float32(rel*14)
+	}
+
+	ly := by + 58
+	for _, ln := range visible {
+		opts.GeoM.Reset()
+		opts.GeoM.Translate(float64(bx+14), float64(ly))
+		opts.ColorScale.ScaleWithColor(color.RGBA{0xd8, 0xdc, 0xec, 0xff})
+		textv2.Draw(screen, ln, mono, opts)
+		ly += 14
+	}
+	if caretX >= 0 {
+		vector.DrawFilledRect(screen, caretX, caretY, 2, 14, color.RGBA{0xff, 0xe8, 0x88, 0xee}, false)
+	}
+
+	vector.DrawFilledRect(screen, bx+20, by+bh-48, 110, 32, color.RGBA{0x40, 0x40, 0x50, 0xff}, false)
+	vector.DrawFilledRect(screen, bx+bw-130, by+bh-48, 110, 32, color.RGBA{0x38, 0x58, 0x78, 0xff}, false)
+	opts = &textv2.DrawOptions{}
+	opts.PrimaryAlign = textv2.AlignCenter
+	opts.SecondaryAlign = textv2.AlignCenter
+	opts.GeoM.Translate(float64(bx+75), float64(by+bh-32))
+	opts.ColorScale.ScaleWithColor(color.RGBA{0xe8, 0xe8, 0xf0, 0xff})
+	textv2.Draw(screen, "Отмена", small, opts)
+	opts.GeoM.Reset()
+	opts.GeoM.Translate(float64(bx+bw-75), float64(by+bh-32))
+	textv2.Draw(screen, "OK", small, opts)
+
+	opts.GeoM.Reset()
+	opts.GeoM.Translate(float64(bx+14), float64(by+bh-22))
+	opts.PrimaryAlign = textv2.AlignStart
+	opts.ColorScale.ScaleWithColor(color.RGBA{0x88, 0x8c, 0x9c, 0xff})
+	textv2.Draw(screen, "←→↑↓ Home/End · Backspace/Delete · Shift+Enter — строка · Enter — OK · Esc — отмена · до 64 KiB", small, opts)
 }
 
 func (a *App) drawSavePanel(screen *ebiten.Image) {
