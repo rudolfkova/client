@@ -99,6 +99,12 @@ type App struct {
 
 	catalogInteractSet map[string]struct{} // texture == id предмета с interact (жёлтая обводка)
 	showTileOverlay    bool                 // F3: координаты и имя предмета на тайлах
+
+	// Кисть из тайлсета: прямоугольник в сетке палитры (Ctrl + ЛКМ перетаскивание).
+	tileBrushCol0, tileBrushRow0 int
+	tileBrushW, tileBrushH       int
+	palBrushDrag                 bool
+	palDragSC, palDragSR, palDragEC, palDragER int
 }
 
 func New(wsGame *websocket.Conn, msgs <-chan gamekit.Envelope) *App {
@@ -133,7 +139,11 @@ func New(wsGame *websocket.Conn, msgs <-chan gamekit.Envelope) *App {
 		winH:         WindowHeight,
 		editLayer:    0,
 		editRotation: 0,
-		camZoom:      1,
+		camZoom:          1,
+		tileBrushW:       1,
+		tileBrushH:       1,
+		tileBrushCol0:    0,
+		tileBrushRow0:    0,
 	}
 }
 
@@ -177,18 +187,110 @@ func (a *App) sendSpawnCatalog(tx, ty int, instanceArgs json.RawMessage) {
 	}
 }
 
-func (a *App) sendSpawn(tx, ty int) {
+func (a *App) sendSpawnTextureAt(tx, ty int, texture string) {
 	intent := gamekit.TileSpawnIntent{
 		X:        tx,
 		Y:        ty,
 		Layer:    a.editLayer,
 		Rotation: tiles.NormalizeRotationQuarter(a.editRotation),
-		Texture:  a.texture(),
+		Texture:  texture,
 		Blocks:   a.blocks,
 	}
 	if err := gamews.Send(a.wsGame, gamekit.TypeSpawnTile, intent); err != nil {
 		log.Printf("editor spawn_tile: %v", err)
 	}
+}
+
+func (a *App) sendSpawn(tx, ty int) {
+	if a.pickCatalog {
+		return
+	}
+	if !a.pickTilesets {
+		a.sendSpawnTextureAt(tx, ty, a.texture())
+		return
+	}
+	cols := a.tilesetPaletteCols()
+	n := a.tileCount()
+	base := a.currentSet()
+	for dj := 0; dj < a.tileBrushH; dj++ {
+		for di := 0; di < a.tileBrushW; di++ {
+			col := a.tileBrushCol0 + di
+			row := a.tileBrushRow0 + dj
+			if col < 0 || col >= cols {
+				continue
+			}
+			idx := row*cols + col
+			if idx < 0 || idx >= n {
+				continue
+			}
+			tex := tiles.TextureKey(base, idx)
+			a.sendSpawnTextureAt(tx+di, ty+dj, tex)
+		}
+	}
+}
+
+func (a *App) setTileBrush1FromIndex(i int) {
+	cols := a.tilesetPaletteCols()
+	if cols <= 0 {
+		return
+	}
+	a.tileBrushCol0 = i % cols
+	a.tileBrushRow0 = i / cols
+	a.tileBrushW, a.tileBrushH = 1, 1
+	a.tileIdx = i
+	a.clampTileBrushToGrid()
+}
+
+func (a *App) clampTileBrushToGrid() {
+	cols := a.tilesetPaletteCols()
+	n := a.tileCount()
+	if cols <= 0 || n <= 0 {
+		a.tileBrushW, a.tileBrushH = 1, 1
+		a.tileBrushCol0, a.tileBrushRow0 = 0, 0
+		a.tileIdx = 0
+		return
+	}
+	if a.tileBrushW < 1 {
+		a.tileBrushW = 1
+	}
+	if a.tileBrushH < 1 {
+		a.tileBrushH = 1
+	}
+	if a.tileBrushCol0 < 0 {
+		a.tileBrushCol0 = 0
+	}
+	if a.tileBrushRow0 < 0 {
+		a.tileBrushRow0 = 0
+	}
+	for a.tileBrushCol0+a.tileBrushW > cols {
+		a.tileBrushCol0--
+	}
+	if a.tileBrushCol0 < 0 {
+		a.tileBrushCol0 = 0
+		a.tileBrushW = min(a.tileBrushW, cols)
+	}
+	for {
+		valid := true
+		for dj := 0; dj < a.tileBrushH; dj++ {
+			for di := 0; di < a.tileBrushW; di++ {
+				idx := (a.tileBrushRow0+dj)*cols + a.tileBrushCol0 + di
+				if idx >= n {
+					valid = false
+				}
+			}
+		}
+		if valid {
+			break
+		}
+		if a.tileBrushH > 1 {
+			a.tileBrushH--
+		} else if a.tileBrushW > 1 {
+			a.tileBrushW--
+		} else {
+			break
+		}
+	}
+	a.tileIdx = a.tileBrushRow0*cols + a.tileBrushCol0
 }
 
 func (a *App) fillSpawnRect(x0, y0, x1, y1 int) {
@@ -475,6 +577,7 @@ func (a *App) nextSet(delta int) {
 		if tiles.TileCountInSet(a.currentSet()) > 0 {
 			a.clampTileIdx()
 			a.clampScroll()
+			a.setTileBrush1FromIndex(a.tileIdx)
 			return
 		}
 	}
@@ -576,6 +679,7 @@ func (a *App) Update() error {
 	}
 
 	a.handlePaletteScroll(mx, my, wx, wy)
+	a.tickPaletteBrushDrag(mx, my)
 	// Колёсико над картой (слева от палитры): масштаб к курсору.
 	if pxEdge > 0 && wy != 0 && mx >= 0 && mx < pxEdge && my >= 0 && my < a.winH {
 		z0 := a.camZoomEffective()
@@ -618,12 +722,14 @@ func (a *App) Update() error {
 			n := a.tileCount()
 			if n > 0 {
 				a.tileIdx = (a.tileIdx - 1 + n) % n
+				a.setTileBrush1FromIndex(a.tileIdx)
 			}
 		}
 		if inpututil.IsKeyJustPressed(ebiten.KeyArrowRight) {
 			n := a.tileCount()
 			if n > 0 {
 				a.tileIdx = (a.tileIdx + 1) % n
+				a.setTileBrush1FromIndex(a.tileIdx)
 			}
 		}
 		if inpututil.IsKeyJustPressed(ebiten.KeyArrowUp) {
@@ -783,7 +889,28 @@ func (a *App) Draw(screen *ebiten.Image) {
 				if a.rectDrag {
 					ga = 0.38
 				}
-				tiles.DrawGhost(screen, tx, ty, a.texture(), a.editRotation, a.blocks, camOpts, ga)
+				if a.pickTilesets && (a.tileBrushW > 1 || a.tileBrushH > 1) {
+					cols := a.tilesetPaletteCols()
+					n := a.tileCount()
+					base := a.currentSet()
+					for dj := 0; dj < a.tileBrushH; dj++ {
+						for di := 0; di < a.tileBrushW; di++ {
+							col := a.tileBrushCol0 + di
+							row := a.tileBrushRow0 + dj
+							if col < 0 || col >= cols {
+								continue
+							}
+							idx := row*cols + col
+							if idx < 0 || idx >= n {
+								continue
+							}
+							tk := tiles.TextureKey(base, idx)
+							tiles.DrawGhost(screen, tx+di, ty+dj, tk, a.editRotation, a.blocks, camOpts, ga*0.85)
+						}
+					}
+				} else {
+					tiles.DrawGhost(screen, tx, ty, a.texture(), a.editRotation, a.blocks, camOpts, ga)
+				}
 			}
 		}
 	}
@@ -820,7 +947,7 @@ func (a *App) Draw(screen *ebiten.Image) {
 
 	a.drawPalette(screen)
 
-	line1 := "Стрелки — камера · Shift+стрелки — палитра · над картой: колёсико — масштаб · +/- — масштаб к центру · над сеткой палитры: колёсико / Shift+колёсико вбок · ЛКМ кисть · Ctrl+ЛКМ заливка (не «Предметы») · ПКМ стереть · «Предметы»: ЛКМ — окно instance_args · F3 подписи клеток · край палитры — ширина · F2 сохранить · , . слой · R поворот"
+	line1 := "Стрелки — камера · Shift+стрелки — палитра · над картой: колёсико — масштаб · +/- — масштаб к центру · над сеткой палитры: колёсико / Shift+колёсико вбок · «Наборы»: Ctrl+ЛКМ по сетке — кисть из прямоугольника тайлов · ЛКМ кисть · Ctrl+ЛКМ заливка (не «Предметы») · ПКМ стереть · «Предметы»: ЛКМ — окно instance_args · F3 подписи клеток · край палитры — ширина · F2 сохранить · , . слой · R поворот"
 	hudFace := &textv2.GoTextFace{Source: ui.FontSource(), Size: 14}
 	hudOpts := &textv2.DrawOptions{}
 	hudOpts.ColorScale.ScaleWithColor(color.RGBA{0xf0, 0xf0, 0xf0, 0xff})
@@ -1205,5 +1332,8 @@ func (a *App) Layout(outsideWidth, outsideHeight int) (int, int) {
 	a.winH = outsideHeight
 	a.clampPaletteWidth()
 	a.clampScroll()
+	if a.pickTilesets {
+		a.clampTileBrushToGrid()
+	}
 	return outsideWidth, outsideHeight
 }

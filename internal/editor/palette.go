@@ -6,6 +6,7 @@ import (
 	"math"
 
 	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/hajimehoshi/ebiten/v2/inpututil"
 	textv2 "github.com/hajimehoshi/ebiten/v2/text/v2"
 	"github.com/hajimehoshi/ebiten/v2/vector"
 	"client/internal/tiles"
@@ -259,6 +260,7 @@ func (a *App) handlePaletteClick(mx, my int) bool {
 		a.pickTilesets = true
 		a.pickCatalog = false
 		a.clampTileIdx()
+		a.setTileBrush1FromIndex(a.tileIdx)
 		a.paletteScroll, a.paletteScrollX = 0, 0
 		a.clampScroll()
 		return true
@@ -321,7 +323,9 @@ func (a *App) handlePaletteClick(mx, my int) bool {
 		}
 		i := row*cols + col
 		if i >= 0 && i < n {
-			a.tileIdx = i
+			if !a.ctrlHeld() {
+				a.setTileBrush1FromIndex(i)
+			}
 		}
 		return true
 	}
@@ -539,10 +543,11 @@ func (a *App) drawPalette(dst *ebiten.Image) {
 				op.GeoM.Translate(float64(cx), float64(cy))
 				dst.DrawImage(img, op)
 			}
-			if i == a.tileIdx {
+			if i == a.tileIdx && a.tileBrushW == 1 && a.tileBrushH == 1 {
 				vector.StrokeRect(dst, cx-1, cy-1, float32(thumbSize)+2, float32(thumbSize)+2, 2, color.RGBA{0xff, 0xcc, 0x33, 0xff}, false)
 			}
 		}
+		a.drawPaletteTileBrushRect(dst, px, gy0)
 	} else if a.pickCatalog {
 		for i, id := range a.catalogInteractIDs {
 			cy := gy0 + float32(i*rowH) - float32(a.paletteScroll)
@@ -601,6 +606,92 @@ func (a *App) drawPalette(dst *ebiten.Image) {
 			}
 		}
 	}
+}
+
+func (a *App) drawPaletteTileBrushRect(dst *ebiten.Image, px, gy0 float32) {
+	n := a.tileCount()
+	if n <= 0 {
+		return
+	}
+	step := float32(a.thumbStep())
+	c0, r0 := a.tileBrushCol0, a.tileBrushRow0
+	wb, hb := a.tileBrushW, a.tileBrushH
+	if a.palBrushDrag {
+		c0 = min(a.palDragSC, a.palDragEC)
+		c1 := max(a.palDragSC, a.palDragEC)
+		r0 = min(a.palDragSR, a.palDragER)
+		r1 := max(a.palDragSR, a.palDragER)
+		wb = c1 - c0 + 1
+		hb = r1 - r0 + 1
+	}
+	rx := px + float32(pad) + float32(c0)*step - float32(a.paletteScrollX) - 2
+	ry := gy0 + float32(r0)*step - float32(a.paletteScroll) - 2
+	rw := float32(wb)*step + 4
+	rh := float32(hb)*step + 4
+	vector.StrokeRect(dst, rx, ry, rw, rh, 2.5, color.RGBA{0x58, 0xc8, 0xf0, 0xee}, false)
+}
+
+func (a *App) tickPaletteBrushDrag(mx, my int) {
+	if !a.pickTilesets || a.paletteDrag {
+		return
+	}
+	col, row, ok := a.paletteTilesetGridCell(mx, my)
+	if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) && a.ctrlHeld() && ok {
+		a.palBrushDrag = true
+		a.palDragSC, a.palDragSR = col, row
+		a.palDragEC, a.palDragER = col, row
+	}
+	if a.palBrushDrag && ebiten.IsMouseButtonPressed(ebiten.MouseButtonLeft) && a.ctrlHeld() {
+		if ok {
+			a.palDragEC, a.palDragER = col, row
+		}
+	}
+	if inpututil.IsMouseButtonJustReleased(ebiten.MouseButtonLeft) && a.palBrushDrag {
+		a.palBrushDrag = false
+		a.finalizePaletteBrushRect()
+	}
+}
+
+func (a *App) paletteTilesetGridCell(mx, my int) (col, row int, ok bool) {
+	if !a.inPalette(mx, my) || !a.pickTilesets {
+		return 0, 0, false
+	}
+	if my < paletteGridTop() || my >= a.gridBottom() {
+		return 0, 0, false
+	}
+	px := a.paletteX()
+	step := a.thumbStep()
+	cols := a.tilesetPaletteCols()
+	if cols <= 0 || step <= 0 {
+		return 0, 0, false
+	}
+	relX := mx - (px + pad) + a.paletteScrollX
+	relY := my - paletteGridTop() + a.paletteScroll
+	if relY < 0 {
+		return 0, 0, false
+	}
+	col = relX / step
+	row = relY / step
+	if col < 0 || col >= cols {
+		return 0, 0, false
+	}
+	i := row*cols + col
+	if i < 0 || i >= a.tileCount() {
+		return 0, 0, false
+	}
+	return col, row, true
+}
+
+func (a *App) finalizePaletteBrushRect() {
+	c0 := min(a.palDragSC, a.palDragEC)
+	c1 := max(a.palDragSC, a.palDragEC)
+	r0 := min(a.palDragSR, a.palDragER)
+	r1 := max(a.palDragSR, a.palDragER)
+	a.tileBrushCol0 = c0
+	a.tileBrushRow0 = r0
+	a.tileBrushW = c1 - c0 + 1
+	a.tileBrushH = r1 - r0 + 1
+	a.clampTileBrushToGrid()
 }
 
 func (a *App) mapTileFromCursor(mx, my int) (tx, ty int, ok bool) {
