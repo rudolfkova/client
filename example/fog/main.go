@@ -72,7 +72,10 @@ func (a *app) Draw(screen *ebiten.Image) {
 			op := &ebiten.DrawRectShaderOptions{
 				GeoM: gm,
 				Uniforms: map[string]any{
-					"Time": t,
+					"Time":     t,
+					"EdgeFade": float32(1),
+					"CamX":     float32(0),
+					"CamY":     float32(0),
 				},
 			}
 			screen.DrawRectShader(tw, th, a.shader, op)

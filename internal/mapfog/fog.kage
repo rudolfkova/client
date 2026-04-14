@@ -3,15 +3,17 @@
 package main
 
 var Time float
+// EdgeFade 0…1 — смягчение у границы с «землёй» (слой 0), задаётся из Go по расстоянию до ближайшей занятой клетки.
 var EdgeFade float
+// CamX, CamY — смещение камеры в px (как у тайлов): мир в точке экрана = dstPos + Cam.
 var CamX float
 var CamY float
 
 // --- Подгонка вручную (не uniform): меняй только литералы в return ниже. ---
 
-// noiseCells — плотность шума по экрану: больше значение → мельче «частицы» / клетки hash.
+// noiseCells — плотность шума в мировых px (через нормировку на размер dst): больше → мельче «зерно».
 func fogNoiseCells() float {
-	return 250.0
+	return 18.0
 }
 
 // driftX, driftY — скорость дрейфа тумана (множители к Time в UV-пространстве).
@@ -34,15 +36,18 @@ func hash(p vec2) float {
 }
 
 func Fragment(dstPos vec4, srcPos vec2, color vec4) vec4 {
+	// Мировые пиксели (как GridPad + tile*TileSize): шум «ездит» с картой при скролле камеры.
 	worldPx := dstPos.xy + vec2(CamX, CamY)
 	ds := imageDstSize()
 	p := worldPx*fogNoiseCells()/ds + vec2(Time*fogDriftX(), Time*fogDriftY())
 
 	fog := hash(floor(p))
 	fog = smoothstep(0.3, 0.7, fog)
+	// Лёгкая модуляция по миру (не по экрану), чтобы не было «прилипшего к окну» градиента.
 	fog *= 0.55 + 0.45*clamp(fract(worldPx.y*0.00035+worldPx.x*0.00012), 0.35, 1.0)
 
 	fogColor := vec3(0.75, 0.75, 0.8)
 	a := fog * fogAlphaScale() * EdgeFade
+	// Премультиплицированный RGBA — иначе при малых a Ebiten даёт «молочную» заливку клетки полным fogColor.
 	return vec4(fogColor*a, a)
 }

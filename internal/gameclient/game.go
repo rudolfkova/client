@@ -21,6 +21,7 @@ import (
 	"client/internal/gamecontent"
 	"client/internal/gamews"
 	"client/internal/lobby"
+	"client/internal/mapfog"
 	"client/internal/playeranim"
 	"client/internal/state"
 	"client/internal/tiles"
@@ -90,6 +91,8 @@ type Game struct {
 	statsSlide           float32 // 0 = спрятано влево, 1 = видно (сглаживание)
 
 	interactTextures map[string]struct{} // texture == id из catalog с interact
+
+	worldFog *mapfog.Fog // туман в клетках без слоя 0 (после всех тайлов, «слой 10»)
 }
 
 func NewGame(accessToken, refreshToken string, userID int64, lobbyChatID int64, characterDisplayName string, wsChat *websocket.Conn, wsGame *websocket.Conn, wsMsgs <-chan gamekit.Envelope, wsLobbyPush <-chan lobby.SubscribeMessage, lobbyLines []lobby.Line) *Game {
@@ -119,6 +122,8 @@ func NewGame(accessToken, refreshToken string, userID int64, lobbyChatID int64, 
 		statsSlide:           1,
 
 		interactTextures: gamecontent.InteractTextureSet(data.ContentCatalogJSON),
+
+		worldFog: mapfog.NewFog(),
 	}
 }
 
@@ -396,7 +401,7 @@ func (g *Game) tickPlayerVis() {
 }
 
 func (g *Game) Draw(screen *ebiten.Image) {
-	screen.Clear()
+	screen.Fill(color.RGBA{R: 0x18, G: 0x1c, B: 0x28, A: 0xff})
 
 	camX, camY := g.viewCam()
 	camOpts := tiles.DrawOpts{CamX: camX, CamY: camY}
@@ -501,6 +506,10 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		if t.Layer >= playerTileLayer {
 			tiles.Draw(screen, t, camOpts)
 		}
+	}
+
+	if g.worldFog != nil {
+		g.worldFog.Draw(screen, g.World.Tiles, camX, camY)
 	}
 
 	g.drawStatsPanel(screen)
