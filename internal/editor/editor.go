@@ -105,6 +105,8 @@ type App struct {
 	tileBrushW, tileBrushH       int
 	palBrushDrag                 bool
 	palDragSC, palDragSR, palDragEC, palDragER int
+
+	editorAnimStart time.Time // фаза анимированных тайлсетов anim/*
 }
 
 func New(wsGame *websocket.Conn, msgs <-chan gamekit.Envelope) *App {
@@ -144,6 +146,8 @@ func New(wsGame *websocket.Conn, msgs <-chan gamekit.Envelope) *App {
 		tileBrushH:       1,
 		tileBrushCol0:    0,
 		tileBrushRow0:    0,
+
+		editorAnimStart: time.Now(),
 	}
 }
 
@@ -587,6 +591,7 @@ func (a *App) Update() error {
 	if err := a.drainWebSocket(); err != nil {
 		return err
 	}
+	tiles.SetEditorAnimTime(time.Since(a.editorAnimStart).Seconds())
 	if a.saveToast != "" && !a.saveToastDeadline.IsZero() && time.Now().After(a.saveToastDeadline) {
 		a.saveToast = ""
 	}

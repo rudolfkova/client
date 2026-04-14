@@ -44,9 +44,12 @@ func imageForTexture(name string) *ebiten.Image {
 	}
 	imgMu.Unlock()
 
-	// Тайлсет: Beach_Tile_7 → лениво грузим весь лист, если init ещё не успел.
+	// Индексированное имя: статический тайлсет или anim/… (строка листа = кадры по X).
 	if base, _, ok := ParseIndexedTexture(name); ok {
 		ensureTilesetLoaded(base)
+		if img := animImageForTexture(name); img != nil {
+			return img
+		}
 		imgMu.Lock()
 		img := imgByID[name]
 		imgMu.Unlock()

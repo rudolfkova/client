@@ -1,0 +1,48 @@
+//kage:unit pixels
+
+package main
+
+var Time float
+
+// --- Подгонка вручную (не uniform): меняй только литералы в return ниже. ---
+
+// noiseCells — плотность шума по экрану: больше значение → мельче «частицы» / клетки hash.
+func fogNoiseCells() float {
+	return 250.0
+}
+
+// driftX, driftY — скорость дрейфа тумана (множители к Time в UV-пространстве).
+func fogDriftX() float {
+	return 0.3 * 2.0
+}
+
+func fogDriftY() float {
+	return 0.15 * 2.0
+}
+
+// alphaScale — множитель к яркости шума для итоговой прозрачности (0…1): больше — плотнее туман.
+func fogAlphaScale() float {
+	return 0.8
+}
+
+// Быстрый хеш (дешёвый шум)
+func hash(p vec2) float {
+	return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453)
+}
+
+func Fragment(dstPos vec4, srcPos vec2, color vec4) vec4 {
+	// Глобальные координаты по всему dst-изображению (экран), а не по плитке —
+	// туман одинаковый, будто один полноэкранный проход, даже если рисуем кусками 32×32.
+	uv := (dstPos.xy - imageDstOrigin()) / imageDstSize()
+
+	p := uv*fogNoiseCells() + vec2(Time*fogDriftX(), Time*fogDriftY())
+
+	fog := hash(floor(p))
+	fog = smoothstep(0.3, 0.7, fog)
+	fog *= uv.y
+
+	fogColor := vec3(0.75, 0.75, 0.8)
+	alpha := fog * fogAlphaScale()
+
+	return vec4(fogColor, alpha)
+}

@@ -6,6 +6,7 @@ import (
 	"image"
 	"image/png"
 	"log"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -47,10 +48,13 @@ func TextureKey(setBase string, index0 int) string {
 	return fmt.Sprintf("%s_%d", setBase, index0+1)
 }
 
-// EditorTileSets копия списка имён наборов для UI редактора.
+// EditorTileSets список имён наборов для UI редактора: корневые tileSets + anim/*.
 func EditorTileSets() []string {
-	out := make([]string, len(editorTileSetBases))
-	copy(out, editorTileSetBases)
+	n := len(editorTileSetBases) + len(editorAnimSetBases)
+	out := make([]string, 0, n)
+	out = append(out, editorTileSetBases...)
+	out = append(out, editorAnimSetBases...)
+	slices.Sort(out)
 	return out
 }
 
@@ -80,6 +84,11 @@ func ensureTilesetLoaded(base string) {
 		return
 	}
 	setMu.Unlock()
+
+	if strings.HasPrefix(base, "anim/") {
+		ensureAnimTilesetLoaded(base)
+		return
+	}
 
 	path := "assets/tileSets/" + base + ".png"
 	if _, err := registerTilesetPNG(path, base); err != nil {

@@ -18,8 +18,8 @@ import (
 	"github.com/rudolfkova/grpc_auth/pkg/gamekit"
 
 	"client/data"
-	"client/internal/gamews"
 	"client/internal/gamecontent"
+	"client/internal/gamews"
 	"client/internal/lobby"
 	"client/internal/playeranim"
 	"client/internal/state"
@@ -45,11 +45,11 @@ const (
 	// playerTileLayer — виртуальный слой персонажей: тайлы с Layer < этого (0=земля, 1=предметы) под ними, Layer ≥ — над (навесы и т.д.).
 	playerTileLayer = 2
 
-	statsPanelW       = float32(228)
-	statsSlideLambda  = 11.0
-	statsTitleSize    = 15.0
-	statsLineSize     = 13.0
-	statsHintSize     = 11.0
+	statsPanelW      = float32(228)
+	statsSlideLambda = 11.0
+	statsTitleSize   = 15.0
+	statsLineSize    = 13.0
+	statsHintSize    = 11.0
 )
 
 type chatBubble struct {
@@ -82,12 +82,12 @@ type Game struct {
 
 	chatBubbles map[int64]chatBubble // sender_id == id игрока в игре
 
-	demoWalkPhase   map[int64]float64
-	demoWalkMoving  map[int64]bool
+	demoWalkPhase  map[int64]float64
+	demoWalkMoving map[int64]bool
 
 	characterDisplayName string
-	statsPanelOpen      bool
-	statsSlide          float32 // 0 = спрятано влево, 1 = видно (сглаживание)
+	statsPanelOpen       bool
+	statsSlide           float32 // 0 = спрятано влево, 1 = видно (сглаживание)
 
 	interactTextures map[string]struct{} // texture == id из catalog с interact
 }
@@ -105,11 +105,11 @@ func NewGame(accessToken, refreshToken string, userID int64, lobbyChatID int64, 
 		wsMsgs:      wsMsgs,
 		wsLobbyPush: wsLobbyPush,
 
-		World:         state.NewWorld(),
-		visTile:       make(map[int64]struct{ X, Y float32 }),
-		lobbyLines:    lobbyLines,
-		lobbyChatSize: 13,
-		lobbyChatID:   lobbyChatID,
+		World:          state.NewWorld(),
+		visTile:        make(map[int64]struct{ X, Y float32 }),
+		lobbyLines:     lobbyLines,
+		lobbyChatSize:  13,
+		lobbyChatID:    lobbyChatID,
 		chatBubbles:    make(map[int64]chatBubble),
 		demoWalkPhase:  make(map[int64]float64),
 		demoWalkMoving: make(map[int64]bool),
@@ -523,7 +523,7 @@ func (g *Game) drawStatsPanel(screen *ebiten.Image) {
 	if ok {
 		extraSkin = statsLineSize + 4
 	}
-	bodyH := float32(8+statsTitleSize+6+statsLineSize+4+extraSkin+6*statsLineSize+2*statsHintSize+22)
+	bodyH := float32(8 + statsTitleSize + 6 + statsLineSize + 4 + extraSkin + 6*statsLineSize + 2*statsHintSize + 22)
 	vector.DrawFilledRect(screen, px, py, statsPanelW, bodyH, color.RGBA{0x14, 0x16, 0x22, 0xee}, false)
 	vector.StrokeRect(screen, px, py, statsPanelW, bodyH, 1, color.RGBA{0x5a, 0x68, 0x88, 0xff}, false)
 
