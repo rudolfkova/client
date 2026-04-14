@@ -1,0 +1,27 @@
+//kage:unit pixels
+
+package main
+
+// Сэмплы по srcPos внутри Images[0]. Для непрерывного блюра по сетке тайлов в Go в Images[0]
+// подаётся окно «тайл + ореол» (соседи из полной сцены уже скопированы в этот буфер).
+
+// Смещение сэмплов в текселях исходной текстуры (аналог TexelSize*Strength в UV).
+var BlurPx float
+
+func Fragment(dstPos vec4, srcPos vec2, color vec4) vec4 {
+	off := vec2(BlurPx, BlurPx)
+
+	sum := imageSrc0At(srcPos) * 0.2
+
+	sum += imageSrc0At(srcPos + vec2(off.x, 0.0)) * 0.15
+	sum += imageSrc0At(srcPos - vec2(off.x, 0.0)) * 0.15
+	sum += imageSrc0At(srcPos + vec2(0.0, off.y)) * 0.15
+	sum += imageSrc0At(srcPos - vec2(0.0, off.y)) * 0.15
+
+	sum += imageSrc0At(srcPos + off) * 0.05
+	sum += imageSrc0At(srcPos + vec2(-off.x, off.y)) * 0.05
+	sum += imageSrc0At(srcPos + vec2(off.x, -off.y)) * 0.05
+	sum += imageSrc0At(srcPos - off) * 0.05
+
+	return sum
+}

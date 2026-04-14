@@ -1,0 +1,12 @@
+//kage:unit pixels
+
+package main
+
+// imageSrc0 — исходный кадр, imageSrc1 — полноэкранный блюр, imageSrc2.a — маска пустых клеток (0…1, с edgeFade).
+
+func Fragment(dstPos vec4, srcPos vec2, color vec4) vec4 {
+	orig := imageSrc0At(srcPos)
+	blur := imageSrc1At(srcPos)
+	m := clamp(imageSrc2At(srcPos).a, 0.0, 1.0)
+	return orig*(1.0-m) + blur*m
+}

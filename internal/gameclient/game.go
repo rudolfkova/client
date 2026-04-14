@@ -506,6 +506,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		if t.Layer >= playerTileLayer {
 			tiles.Draw(screen, t, camOpts)
 		}
+
 	}
 
 	if g.worldFog != nil {

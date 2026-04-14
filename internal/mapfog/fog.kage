@@ -13,7 +13,7 @@ var CamY float
 
 // noiseCells — плотность шума в мировых px (через нормировку на размер dst): больше → мельче «зерно».
 func fogNoiseCells() float {
-	return 18.0
+	return 180.0
 }
 
 // driftX, driftY — скорость дрейфа тумана (множители к Time в UV-пространстве).

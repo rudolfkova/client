@@ -2,11 +2,13 @@ package mapfog
 
 import (
 	_ "embed"
+	"image/color"
 	"log"
 	"math"
 	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/hajimehoshi/ebiten/v2/vector"
 	"github.com/rudolfkova/grpc_auth/pkg/gamekit"
 
 	"client/internal/world"
@@ -15,20 +17,104 @@ import (
 //go:embed fog.kage
 var fogKage []byte
 
-// Fog процедурный туман по пустым клеткам слоя 0 (см. example/fog/FOG_SHADER.md).
-type Fog struct {
-	sh    *ebiten.Shader
-	start time.Time
+//go:embed blur.kage
+var blurKage []byte
+
+//go:embed composite.kage
+var compositeKage []byte
+
+const (
+	// blurStrengthPx — полноэкранный блюр (маска смягчает края клеток).
+	blurStrengthPx = float32(3)
+)
+
+type voidCell struct {
+	rx0, ry0, tw, th int
+	edgeFade         float32
 }
 
-// NewFog компилирует шейдер; при ошибке sh == nil, Draw не рисует.
+// Fog процедурный туман по пустым клеткам слоя 0 (см. example/fog/FOG_SHADER.md).
+// Блюр: один проход по всему экрану + маска пустых клеток + composite (дешевле сотен тайловых шейдеров).
+type Fog struct {
+	sh         *ebiten.Shader
+	blurSh     *ebiten.Shader
+	compositeSh *ebiten.Shader
+	scratch    *ebiten.Image
+	blurred    *ebiten.Image
+	mask       *ebiten.Image
+	bufW       int
+	bufH       int
+	voidBuf    []voidCell
+	start      time.Time
+}
+
+// NewFog компилирует шейдеры; при ошибке соответствующий указатель nil.
 func NewFog() *Fog {
-	sh, err := ebiten.NewShader(fogKage)
-	if err != nil {
-		log.Printf("mapfog: shader: %v", err)
-		return &Fog{}
+	f := &Fog{start: time.Now()}
+	if sh, err := ebiten.NewShader(fogKage); err != nil {
+		log.Printf("mapfog: fog shader: %v", err)
+	} else {
+		f.sh = sh
 	}
-	return &Fog{sh: sh, start: time.Now()}
+	if bsh, err := ebiten.NewShader(blurKage); err != nil {
+		log.Printf("mapfog: blur shader: %v", err)
+	} else {
+		f.blurSh = bsh
+	}
+	if csh, err := ebiten.NewShader(compositeKage); err != nil {
+		log.Printf("mapfog: composite shader: %v", err)
+	} else {
+		f.compositeSh = csh
+	}
+	return f
+}
+
+func (f *Fog) ensureBuffers(dst *ebiten.Image) {
+	if f == nil || f.blurSh == nil || f.compositeSh == nil {
+		return
+	}
+	ww, wh := dst.Bounds().Dx(), dst.Bounds().Dy()
+	if ww <= 0 || wh <= 0 {
+		return
+	}
+	if f.scratch != nil && f.bufW == ww && f.bufH == wh {
+		return
+	}
+	f.bufW, f.bufH = ww, wh
+	f.scratch = ebiten.NewImage(ww, wh)
+	f.blurred = ebiten.NewImage(ww, wh)
+	f.mask = ebiten.NewImage(ww, wh)
+}
+
+func (f *Fog) blurComposite(dst *ebiten.Image, cells []voidCell, ww, wh int) {
+	if f.blurSh == nil || f.compositeSh == nil || f.scratch == nil || f.blurred == nil || f.mask == nil {
+		return
+	}
+	f.scratch.DrawImage(dst, nil)
+
+	bop := &ebiten.DrawRectShaderOptions{
+		Uniforms: map[string]any{
+			"BlurPx": blurStrengthPx,
+		},
+		Images: [4]*ebiten.Image{f.scratch},
+	}
+	f.blurred.DrawRectShader(ww, wh, f.blurSh, bop)
+
+	f.mask.Clear()
+	for i := range cells {
+		c := &cells[i]
+		a := uint8(math.Round(float64(c.edgeFade) * 255))
+		if a == 0 {
+			continue
+		}
+		vector.DrawFilledRect(f.mask, float32(c.rx0), float32(c.ry0), float32(c.tw), float32(c.th),
+			color.RGBA{R: 0xff, G: 0xff, B: 0xff, A: a}, false)
+	}
+
+	cop := &ebiten.DrawRectShaderOptions{
+		Images: [4]*ebiten.Image{f.scratch, f.blurred, f.mask},
+	}
+	dst.DrawRectShader(ww, wh, f.compositeSh, cop)
 }
 
 type tileXY struct{ x, y int }
@@ -78,9 +164,12 @@ func fadeFromBorderDist(d int) float32 {
 	return float32(t * t * (3 - 2*t))
 }
 
-// Draw поверх dst: в каждой видимой клетке без тайла на слое 0 — DrawRectShader (как слой 10).
+// Draw поверх dst: блюр по маске пустых клеток (один полноэкранный проход), затем туман по клеткам.
 func (f *Fog) Draw(dst *ebiten.Image, tiles []gamekit.Tile, camX, camY float32) {
-	if f == nil || f.sh == nil {
+	if f == nil {
+		return
+	}
+	if f.sh == nil && (f.blurSh == nil || f.compositeSh == nil) {
 		return
 	}
 	ww, wh := dst.Bounds().Dx(), dst.Bounds().Dy()
@@ -103,6 +192,7 @@ func (f *Fog) Draw(dst *ebiten.Image, tiles []gamekit.Tile, camX, camY float32) 
 	pad := float64(world.GridPad)
 	const searchR = 12
 
+	f.voidBuf = f.voidBuf[:0]
 	for ty := minTY; ty <= maxTY; ty++ {
 		for tx := minTX; tx <= maxTX; tx++ {
 			if _, ok := occ[tileXY{tx, ty}]; ok {
@@ -128,19 +218,32 @@ func (f *Fog) Draw(dst *ebiten.Image, tiles []gamekit.Tile, camX, camY float32) 
 			if tw <= 0 || th <= 0 {
 				continue
 			}
-			var gm ebiten.GeoM
-			gm.Translate(float64(rx0), float64(ry0))
-			op := &ebiten.DrawRectShaderOptions{
-				GeoM: gm,
-				Uniforms: map[string]any{
-					"Time":     t,
-					"EdgeFade": edgeFade,
-					"CamX":     camX,
-					"CamY":     camY,
-				},
-			}
-			dst.DrawRectShader(tw, th, f.sh, op)
+			f.voidBuf = append(f.voidBuf, voidCell{rx0: rx0, ry0: ry0, tw: tw, th: th, edgeFade: edgeFade})
 		}
+	}
+
+	if len(f.voidBuf) > 0 && f.blurSh != nil && f.compositeSh != nil {
+		f.ensureBuffers(dst)
+		f.blurComposite(dst, f.voidBuf, ww, wh)
+	}
+
+	if f.sh == nil {
+		return
+	}
+	for i := range f.voidBuf {
+		c := &f.voidBuf[i]
+		var gm ebiten.GeoM
+		gm.Translate(float64(c.rx0), float64(c.ry0))
+		op := &ebiten.DrawRectShaderOptions{
+			GeoM: gm,
+			Uniforms: map[string]any{
+				"Time":     t,
+				"EdgeFade": c.edgeFade,
+				"CamX":     camX,
+				"CamY":     camY,
+			},
+		}
+		dst.DrawRectShader(c.tw, c.th, f.sh, op)
 	}
 }
 
