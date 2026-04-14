@@ -44,6 +44,7 @@ const (
 )
 
 // App — клиент редактора мира: spawn_tile по клику, превью состояния с game WS.
+// Тайлы приходят через тот же state.World, что и в игре: полный tiles / дельта tile_updates (см. changelog-client).
 type App struct {
 	wsGame *websocket.Conn
 	msgs   <-chan gamekit.Envelope
@@ -549,6 +550,7 @@ func (a *App) drainWebSocket() error {
 				a.savePanelOpen = false
 				continue
 			}
+			// state: игроки + tiles / tile_updates — см. state.World.ApplyEnvelope
 			a.World.ApplyEnvelope(msg)
 		default:
 			return nil
@@ -863,16 +865,8 @@ func (a *App) Update() error {
 func (a *App) Draw(screen *ebiten.Image) {
 	screen.Clear()
 
+	// World.Tiles уже отсортирован (Y, X, Layer) в state после каждого применения state.
 	tileList := slices.Clone(a.World.Tiles)
-	slices.SortFunc(tileList, func(x, y gamekit.Tile) int {
-		if x.Y != y.Y {
-			return x.Y - y.Y
-		}
-		if x.X != y.X {
-			return x.X - y.X
-		}
-		return x.Layer - y.Layer
-	})
 	camOpts := tiles.DrawOpts{OutlineBlocking: true, CamX: a.camX, CamY: a.camY, CamZoom: a.camZoom}
 	for _, t := range tileList {
 		tiles.Draw(screen, t, camOpts)
