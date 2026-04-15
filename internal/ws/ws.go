@@ -30,7 +30,7 @@ func ConnectGame(jwt, characterID string) (*websocket.Conn, error) {
 func dialWS(path, jwt string, extraQuery map[string]string) (*websocket.Conn, error) {
 	u := url.URL{
 		Scheme: "ws",
-		Host:   config.GatewayHostPort,
+		Host:   config.GatewayHostPort(),
 		Path:   path,
 	}
 	q := u.Query()

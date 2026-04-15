@@ -71,8 +71,9 @@ type Game struct {
 
 	World *state.World
 
-	lastMoveDx, lastMoveDy int
-	camX, camY             float32
+	// Последний отправленный на сервер move (dx,dy); шлём только при смене — без спама 60/s.
+	lastSentMoveDx, lastSentMoveDy int
+	camX, camY                     float32
 	visTile                map[int64]struct{ X, Y float32 }
 
 	lobbyLines    []lobby.Line
@@ -93,6 +94,10 @@ type Game struct {
 	interactTextures map[string]struct{} // texture == id из catalog с interact
 
 	worldFog *mapfog.Fog // туман в клетках без слоя 0 (после всех тайлов, «слой 10»)
+	fogMode  mapfog.RenderMode // F4: туман+блюр → только туман → только блюр → выкл
+
+	// animTilesStart — фаза anim/* тайлсетов (как в редакторе: tiles.SetEditorAnimTime).
+	animTilesStart time.Time
 }
 
 func NewGame(accessToken, refreshToken string, userID int64, lobbyChatID int64, characterDisplayName string, wsChat *websocket.Conn, wsGame *websocket.Conn, wsMsgs <-chan gamekit.Envelope, wsLobbyPush <-chan lobby.SubscribeMessage, lobbyLines []lobby.Line) *Game {
@@ -123,11 +128,13 @@ func NewGame(accessToken, refreshToken string, userID int64, lobbyChatID int64, 
 
 		interactTextures: gamecontent.InteractTextureSet(data.ContentCatalogJSON),
 
-		worldFog: mapfog.NewFog(),
+		worldFog:       mapfog.NewFog(),
+		animTilesStart: time.Now(),
 	}
 }
 
 func (g *Game) Update() error {
+	tiles.SetEditorAnimTime(time.Since(g.animTilesStart).Seconds())
 	g.tickStatsPanelSlide()
 	for {
 		select {
@@ -153,6 +160,9 @@ func (g *Game) Update() error {
 			}
 			g.chatBubbles[push.SenderID] = chatBubble{text: bt, until: time.Now().Add(chatBubbleDur)}
 		default:
+			if inpututil.IsKeyJustPressed(ebiten.KeyF4) {
+				g.fogMode = mapfog.NextRenderMode(g.fogMode)
+			}
 			if inpututil.IsKeyJustPressed(ebiten.KeyTab) {
 				g.lobbyFocused = !g.lobbyFocused
 			}
@@ -185,24 +195,19 @@ func (g *Game) Update() error {
 					}
 				}
 				dx, dy := arrowDirection()
-				moving := dx != 0 || dy != 0
-				wasMoving := g.lastMoveDx != 0 || g.lastMoveDy != 0
-				if moving {
+				if dx != g.lastSentMoveDx || dy != g.lastSentMoveDy {
 					if err := gamews.Send(g.wsGame, gamekit.TypeMove, gamekit.MoveIntent{DX: dx, DY: dy}); err != nil {
 						log.Printf("ws write: %v", err)
 						return err
 					}
-				} else if wasMoving {
-					if err := gamews.Send(g.wsGame, gamekit.TypeMove, gamekit.MoveIntent{DX: 0, DY: 0}); err != nil {
+					g.lastSentMoveDx, g.lastSentMoveDy = dx, dy
+				}
+				target, damage := hitPlayer()
+				if damage != 0 && target != 0 {
+					if err := gamews.Send(g.wsGame, gamekit.TypeHit, gamekit.HitIntent{TargetID: target, Damage: damage}); err != nil {
 						log.Printf("ws write: %v", err)
 						return err
 					}
-				}
-				g.lastMoveDx, g.lastMoveDy = dx, dy
-				target, damage := hitPlayer()
-				if err := gamews.Send(g.wsGame, gamekit.TypeHit, gamekit.HitIntent{TargetID: target, Damage: damage}); err != nil {
-					log.Printf("ws write: %v", err)
-					return err
 				}
 				if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonRight) {
 					g.tryInteractAtCursor()
@@ -234,7 +239,7 @@ func arrowDirection() (dx, dy int) {
 }
 
 func hitPlayer() (target int64, damage int) {
-	if ebiten.IsKeyPressed(ebiten.KeySpace) {
+	if inpututil.IsKeyJustPressed(ebiten.KeySpace) {
 		damage = 1
 		target = 4
 	}
@@ -510,14 +515,30 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	}
 
 	if g.worldFog != nil {
-		g.worldFog.Draw(screen, g.World.Tiles, camX, camY)
+		g.worldFog.Draw(screen, g.World.Tiles, camX, camY, g.fogMode)
 	}
 
 	g.drawStatsPanel(screen)
 	g.drawLobbyChat(screen)
+	g.drawPerfHud(screen)
 }
 
 func abMod(v int) int { return (v - 10) / 2 }
+
+func fogModeTag(m mapfog.RenderMode) string {
+	switch m {
+	case mapfog.RenderBlurAndFog:
+		return "туман+блюр"
+	case mapfog.RenderFogOnly:
+		return "туман"
+	case mapfog.RenderBlurOnly:
+		return "блюр"
+	case mapfog.RenderNone:
+		return "выкл"
+	default:
+		return "?"
+	}
+}
 
 func (g *Game) drawStatsPanel(screen *ebiten.Image) {
 	px := float32(14) - (1-g.statsSlide)*float32(statsPanelW+28)
@@ -642,6 +663,29 @@ func (g *Game) sendLobbyLine() {
 	if err := lobby.SendLine(g.jwt, g.lobbyChatID, g.userID, text); err != nil {
 		log.Printf("lobby send: %v", err)
 	}
+}
+
+func (g *Game) drawPerfHud(screen *ebiten.Image) {
+	b := screen.Bounds()
+	ww, wh := b.Dx(), b.Dy()
+	if ww <= 0 || wh <= 0 {
+		return
+	}
+	line := fmt.Sprintf("FPS %.1f  TPS %.1f  [%s] F4", ebiten.ActualFPS(), ebiten.ActualTPS(), fogModeTag(g.fogMode))
+	face := &textv2.GoTextFace{Source: ui.FontSource(), Size: 12}
+	_, th := textv2.Measure(line, face, 0)
+	const margin = 10.0
+	x := margin
+	y := float32(wh) - float32(th) - margin
+
+	sh := &textv2.DrawOptions{}
+	sh.GeoM.Translate(float64(x+1), float64(y+1))
+	sh.ColorScale.ScaleWithColor(color.RGBA{0x10, 0x12, 0x18, 0xb0})
+	textv2.Draw(screen, line, face, sh)
+	op := &textv2.DrawOptions{}
+	op.GeoM.Translate(float64(x), float64(y))
+	op.ColorScale.ScaleWithColor(color.RGBA{0xe8, 0xec, 0xf8, 0xff})
+	textv2.Draw(screen, line, face, op)
 }
 
 func (g *Game) drawLobbyChat(screen *ebiten.Image) {

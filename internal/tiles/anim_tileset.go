@@ -30,7 +30,8 @@ type animSheet struct {
 	rows      int
 }
 
-// SetEditorAnimTime выставляет глобальную фазу анимации для редактора (секунды монотонно).
+// SetEditorAnimTime выставляет глобальную фазу анимации anim/* тайлсетов (секунды монотонно).
+// Вызывать каждый кадр из редактора мира и из игрового клиента — иначе кадр анимации залипает на 0.
 func SetEditorAnimTime(sec float64) {
 	editorAnimTM.Lock()
 	editorAnimT = sec

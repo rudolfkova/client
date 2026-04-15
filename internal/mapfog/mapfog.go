@@ -28,6 +28,21 @@ const (
 	blurStrengthPx = float32(3)
 )
 
+// RenderMode — что рисовать по пустым клеткам слоя 0. Цикл: All → FogOnly → BlurOnly → None.
+type RenderMode uint8
+
+const (
+	RenderBlurAndFog RenderMode = iota // блюр + туман
+	RenderFogOnly                      // только туман
+	RenderBlurOnly                     // только блюр
+	RenderNone                         // выключено
+)
+
+// NextRenderMode следующий режим по кругу (для горячей клавиши).
+func NextRenderMode(m RenderMode) RenderMode {
+	return (m + 1) % 4
+}
+
 type voidCell struct {
 	rx0, ry0, tw, th int
 	edgeFade         float32
@@ -164,12 +179,20 @@ func fadeFromBorderDist(d int) float32 {
 	return float32(t * t * (3 - 2*t))
 }
 
-// Draw поверх dst: блюр по маске пустых клеток (один полноэкранный проход), затем туман по клеткам.
-func (f *Fog) Draw(dst *ebiten.Image, tiles []gamekit.Tile, camX, camY float32) {
-	if f == nil {
+// Draw поверх dst: блюр по маске пустых клеток (один полноэкранный проход), затем туман по клеткам — согласно mode.
+func (f *Fog) Draw(dst *ebiten.Image, tiles []gamekit.Tile, camX, camY float32, mode RenderMode) {
+	if f == nil || mode == RenderNone {
 		return
 	}
-	if f.sh == nil && (f.blurSh == nil || f.compositeSh == nil) {
+	wantBlur := mode == RenderBlurAndFog || mode == RenderBlurOnly
+	wantFog := mode == RenderBlurAndFog || mode == RenderFogOnly
+	if wantBlur && (f.blurSh == nil || f.compositeSh == nil) {
+		wantBlur = false
+	}
+	if wantFog && f.sh == nil {
+		wantFog = false
+	}
+	if !wantBlur && !wantFog {
 		return
 	}
 	ww, wh := dst.Bounds().Dx(), dst.Bounds().Dy()
@@ -222,12 +245,12 @@ func (f *Fog) Draw(dst *ebiten.Image, tiles []gamekit.Tile, camX, camY float32) 
 		}
 	}
 
-	if len(f.voidBuf) > 0 && f.blurSh != nil && f.compositeSh != nil {
+	if wantBlur && len(f.voidBuf) > 0 {
 		f.ensureBuffers(dst)
 		f.blurComposite(dst, f.voidBuf, ww, wh)
 	}
 
-	if f.sh == nil {
+	if !wantFog {
 		return
 	}
 	for i := range f.voidBuf {

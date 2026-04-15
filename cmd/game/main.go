@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 
 	"github.com/hajimehoshi/ebiten/v2"
@@ -10,6 +12,7 @@ import (
 
 	"client/internal/auth"
 	"client/internal/characters"
+	"client/internal/config"
 	"client/internal/gameclient"
 	"client/internal/lobby"
 	"client/internal/ws"
@@ -18,6 +21,18 @@ import (
 )
 
 func main() {
+	rd := bufio.NewReader(os.Stdin)
+	fmt.Print("Gateway (host:port) [localhost:8080]: ")
+	gwLine, err := rd.ReadString('\n')
+	if err != nil {
+		log.Fatal(err)
+	}
+	gwLine = strings.TrimSpace(strings.TrimSuffix(gwLine, "\n"))
+	if gwLine != "" {
+		config.SetGatewayHostPort(gwLine)
+	}
+	log.Printf("gateway %s", config.GatewayHostPort())
+
 	var email, password string
 
 	fmt.Print("Login...\nemail: ")
@@ -75,7 +90,7 @@ func main() {
 	go ws.RunSubscribeReadPump(chatConn, lobbyPush, "/ws/subscribe")
 
 	ebiten.SetWindowTitle("dnd game client")
-	ebiten.SetVsyncEnabled(true)
+	ebiten.SetVsyncEnabled(false)
 	ebiten.SetWindowResizingMode(ebiten.WindowResizingModeEnabled)
 	ebiten.SetWindowSize(gameclient.WindowWidth, gameclient.WindowHeight)
 	if err := ebiten.RunGame(gameclient.NewGame(sess.AccessToken, sess.RefreshToken, userID, lobbyID, characterName, chatConn, gameConn, gameMsgs, lobbyPush, lobbyLines)); err != nil {
