@@ -6,6 +6,7 @@ import (
 	"image/png"
 	"math"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/hajimehoshi/ebiten/v2"
@@ -80,6 +81,24 @@ func imageForTexture(name string) *ebiten.Image {
 	return img
 }
 
+// ItemPlaceholderTextureKey — одиночный PNG в assets/ (Chest.png) для id из каталога без своей текстуры.
+const ItemPlaceholderTextureKey = "Chest"
+
+// ResolvedItemTexture — если для wire есть картинка, wire; иначе при isCatalogItem(id) — плейсхолдер.
+func ResolvedItemTexture(wire string, isCatalogItem func(id string) bool) string {
+	wire = strings.TrimSpace(wire)
+	if wire == "" {
+		return ""
+	}
+	if ImageForTexture(wire) != nil {
+		return wire
+	}
+	if isCatalogItem != nil && isCatalogItem(wire) {
+		return ItemPlaceholderTextureKey
+	}
+	return wire
+}
+
 // DrawOpts настройки отрисовки тайла на экране.
 type DrawOpts struct {
 	// OutlineBlocking — красная рамка для клеток с коллизией (редактор).
@@ -88,6 +107,8 @@ type DrawOpts struct {
 	CamX, CamY float32
 	// CamZoom — масштаб карты (только редактор); 0 или отрицательное = 1. В игре не задавать.
 	CamZoom float32
+	// ResolveTexture — если задан, подменяет ключ текстуры перед загрузкой (плейсхолдер предметов и т.д.).
+	ResolveTexture func(tex string) string
 }
 
 func drawCamZoom(z float32) float32 {
@@ -104,7 +125,11 @@ func Draw(screen *ebiten.Image, t gamekit.Tile, opts DrawOpts) {
 	y0 := (float32(world.GridPad) + float32(t.Y)*float32(world.TileSize) - opts.CamY) * z
 	ts := float32(world.TileSize) * z
 
-	img := imageForTexture(t.Texture)
+	tex := t.Texture
+	if opts.ResolveTexture != nil {
+		tex = opts.ResolveTexture(tex)
+	}
+	img := imageForTexture(tex)
 	if img != nil {
 		DrawTextureScaledRotated(screen, img, x0+ts/2, y0+ts/2, ts, t.Rotation)
 	} else {
@@ -128,7 +153,11 @@ func DrawGhost(screen *ebiten.Image, tx, ty int, texture string, rotationQuarter
 	y0 := (float32(world.GridPad) + float32(ty)*float32(world.TileSize) - opts.CamY) * z
 	ts := float32(world.TileSize) * z
 	a8 := uint8(min(255, int(256*alpha)))
-	img := imageForTexture(texture)
+	tex := texture
+	if opts.ResolveTexture != nil {
+		tex = opts.ResolveTexture(tex)
+	}
+	img := imageForTexture(tex)
 	if img != nil {
 		drawTextureScaledRotatedAlpha(screen, img, x0+ts/2, y0+ts/2, ts, rotationQuarter, alpha)
 	} else {

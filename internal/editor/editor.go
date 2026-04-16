@@ -57,7 +57,7 @@ type App struct {
 
 	pickTilesets   bool // true: тайлсеты из assets/tileSets, false: корневые PNG в assets/
 	pickCatalog    bool // вкладка «Предметы»: spawn_tile texture=id из catalog, слой catalogItemLayer
-	catalogInteractIDs []string
+	catalogInteractIDs []string // палитра: interact ∪ pickable (имя поля историческое)
 	catItemIdx           int
 	singleIdx            int
 	paletteScroll  int // вертикаль сетки палитры
@@ -120,9 +120,10 @@ func New(wsGame *websocket.Conn, msgs <-chan gamekit.Envelope) *App {
 			break
 		}
 	}
-	catIDs := gamecontent.InteractItemIDs(data.ContentCatalogJSON)
-	catSet := make(map[string]struct{}, len(catIDs))
-	for _, id := range catIDs {
+	catPalette := gamecontent.CatalogFloorPaletteIDs(data.ContentCatalogJSON)
+	catInteract := gamecontent.InteractItemIDs(data.ContentCatalogJSON)
+	catSet := make(map[string]struct{}, len(catInteract))
+	for _, id := range catInteract {
 		catSet[id] = struct{}{}
 	}
 	return &App{
@@ -134,7 +135,7 @@ func New(wsGame *websocket.Conn, msgs <-chan gamekit.Envelope) *App {
 		tileIdx:              0,
 		blocks:               true,
 		pickTilesets:         true,
-		catalogInteractIDs:   catIDs,
+		catalogInteractIDs:   catPalette,
 		catalogInteractSet:   catSet,
 		singleIdx:            0,
 		paletteWidth: paletteMinW,
@@ -867,7 +868,17 @@ func (a *App) Draw(screen *ebiten.Image) {
 
 	// World.Tiles уже отсортирован (Y, X, Layer) в state после каждого применения state.
 	tileList := slices.Clone(a.World.Tiles)
-	camOpts := tiles.DrawOpts{OutlineBlocking: true, CamX: a.camX, CamY: a.camY, CamZoom: a.camZoom}
+	camOpts := tiles.DrawOpts{
+		OutlineBlocking: true,
+		CamX:            a.camX,
+		CamY:            a.camY,
+		CamZoom:         a.camZoom,
+		ResolveTexture: func(tex string) string {
+			return tiles.ResolvedItemTexture(tex, func(id string) bool {
+				return gamecontent.IsCatalogItemID(data.ContentCatalogJSON, id)
+			})
+		},
+	}
 	for _, t := range tileList {
 		tiles.Draw(screen, t, camOpts)
 	}

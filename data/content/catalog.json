@@ -1,6 +1,11 @@
 {
   "schema_version": 1,
   "items": {
+    "floor_gem": {
+      "id": "floor_gem",
+      "name": "Gem (pickable)",
+      "pickable": true
+    },
     "lever_sample": {
       "id": "lever_sample",
       "name": "Sample lever",

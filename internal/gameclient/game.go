@@ -92,12 +92,16 @@ type Game struct {
 	statsSlide           float32 // 0 = спрятано влево, 1 = видно (сглаживание)
 
 	interactTextures map[string]struct{} // texture == id из catalog с interact
+	pickableTextures map[string]struct{} // texture == id из catalog с pickable (подбор СКМ)
 
 	worldFog *mapfog.Fog // туман в клетках без слоя 0 (после всех тайлов, «слой 10»)
 	fogMode  mapfog.RenderMode // F4: туман+блюр → только туман → только блюр → выкл
 
 	// animTilesStart — фаза anim/* тайлсетов (как в редакторе: tiles.SetEditorAnimTime).
 	animTilesStart time.Time
+
+	// invPickSlot — первый слот для обмена (inventory_move); пусто = нет выбора.
+	invPickSlot string
 }
 
 func NewGame(accessToken, refreshToken string, userID int64, lobbyChatID int64, characterDisplayName string, wsChat *websocket.Conn, wsGame *websocket.Conn, wsMsgs <-chan gamekit.Envelope, wsLobbyPush <-chan lobby.SubscribeMessage, lobbyLines []lobby.Line) *Game {
@@ -127,6 +131,7 @@ func NewGame(accessToken, refreshToken string, userID int64, lobbyChatID int64, 
 		statsSlide:           1,
 
 		interactTextures: gamecontent.InteractTextureSet(data.ContentCatalogJSON),
+		pickableTextures: gamecontent.PickableTextureSet(data.ContentCatalogJSON),
 
 		worldFog:       mapfog.NewFog(),
 		animTilesStart: time.Now(),
@@ -212,11 +217,16 @@ func (g *Game) Update() error {
 				if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonRight) {
 					g.tryInteractAtCursor()
 				}
+				if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonMiddle) {
+					g.tryPickupAtCursor()
+				}
 			}
 			g.tickPlayerVis()
 			g.tickDemoWalkAnims()
 			g.pruneChatBubbles()
 			g.tickCamera()
+			ww, wh := ebiten.WindowSize()
+			g.handleInventoryBarInput(ww, wh)
 			return nil
 		}
 	}
@@ -289,6 +299,75 @@ func (g *Game) tryInteractAtCursor() {
 	}
 	if err := gamews.Send(g.wsGame, gamekit.TypeInteract, intent); err != nil {
 		log.Printf("ws interact: %v", err)
+	}
+}
+
+func playerChebyshevAdjacentToCell(plX, plY, tx, ty int) bool {
+	dx := plX - tx
+	if dx < 0 {
+		dx = -dx
+	}
+	dy := plY - ty
+	if dy < 0 {
+		dy = -dy
+	}
+	m := dx
+	if dy > m {
+		m = dy
+	}
+	return m <= 1
+}
+
+// tryPickupAtCursor — СКМ: pickable-тайл в соседней клетке (Чебышёв ≤ 1) → pickup_item.
+func (g *Game) tryPickupAtCursor() {
+	if len(g.pickableTextures) == 0 {
+		return
+	}
+	pl, ok := g.World.Players[g.userID]
+	if !ok {
+		return
+	}
+	mx, my := ebiten.CursorPosition()
+	cx, cy := g.viewCam()
+	tx, ty, cell := world.TileFromScreenWithCam(mx, my, cx, cy)
+	if !cell {
+		return
+	}
+	if !playerChebyshevAdjacentToCell(pl.X, pl.Y, tx, ty) {
+		return
+	}
+	var best *gamekit.Tile
+	bestL := -100000
+	for i := range g.World.Tiles {
+		t := &g.World.Tiles[i]
+		if t.X != tx || t.Y != ty {
+			continue
+		}
+		if _, pick := g.pickableTextures[t.Texture]; !pick {
+			continue
+		}
+		if t.Layer > bestL {
+			bestL = t.Layer
+			best = t
+		}
+	}
+	if best == nil {
+		return
+	}
+	id := strings.TrimSpace(best.Texture)
+	if id == "" {
+		return
+	}
+	ix, iy := tx, ty
+	L := best.Layer
+	intent := gamekit.PickupIntent{
+		ItemDefID:  id,
+		ClickX:     &ix,
+		ClickY:     &iy,
+		ClickLayer: &L,
+	}
+	if err := gamews.Send(g.wsGame, gamekit.TypePickupItem, intent); err != nil {
+		log.Printf("ws pickup_item: %v", err)
 	}
 }
 
@@ -409,7 +488,15 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	screen.Fill(color.RGBA{R: 0x18, G: 0x1c, B: 0x28, A: 0xff})
 
 	camX, camY := g.viewCam()
-	camOpts := tiles.DrawOpts{CamX: camX, CamY: camY}
+	camOpts := tiles.DrawOpts{
+		CamX: camX,
+		CamY: camY,
+		ResolveTexture: func(tex string) string {
+			return tiles.ResolvedItemTexture(tex, func(id string) bool {
+				return gamecontent.IsCatalogItemID(data.ContentCatalogJSON, id)
+			})
+		},
+	}
 
 	tileList := slices.Clone(g.World.Tiles)
 	slices.SortFunc(tileList, func(a, b gamekit.Tile) int {
@@ -519,6 +606,8 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	}
 
 	g.drawStatsPanel(screen)
+	sw, sh := screen.Bounds().Dx(), screen.Bounds().Dy()
+	g.drawInventoryBar(screen, sw, sh)
 	g.drawLobbyChat(screen)
 	g.drawPerfHud(screen)
 }
@@ -619,7 +708,7 @@ func (g *Game) drawStatsPanel(screen *ebiten.Image) {
 	hin := &textv2.DrawOptions{}
 	hin.GeoM.Translate(float64(px+10), float64(ty))
 	hin.ColorScale.ScaleWithColor(color.RGBA{0x88, 0x90, 0xa8, 0xff})
-	textv2.Draw(screen, "ПКМ по предмету на карте (тайл = id из catalog) — взаимодействие", hintFace, hin)
+	textv2.Draw(screen, "ПКМ — взаимодействие (interact), СКМ — подобрать (pickable)", hintFace, hin)
 	ty += statsHintSize + 4
 	hin.GeoM.Reset()
 	hin.GeoM.Translate(float64(px+10), float64(ty))
