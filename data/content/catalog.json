@@ -6,6 +6,22 @@
       "name": "Gem (pickable)",
       "pickable": true
     },
+    "tent_folded": {
+      "id": "tent_folded",
+      "name": "Folded Tent",
+      "pickable": true,
+      "interact": {
+        "script": "tent_unfold_2x2.json"
+      }
+    },
+    "tent_anchor": {
+      "id": "tent_anchor",
+      "name": "Tent (anchor)",
+      "pickable": false,
+      "interact": {
+        "script": "tent_fold_2x2.json"
+      }
+    },
     "lever_sample": {
       "id": "lever_sample",
       "name": "Sample lever",

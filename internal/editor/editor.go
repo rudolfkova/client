@@ -37,8 +37,8 @@ const (
 	maxSaveNameRunes = 120
 	saveToastDur     = 7 * time.Second
 	cameraPanSpeed   = float32(14) // px за кадр при удержании стрелки
-	// catalogItemLayer — слой «предметов на земле» (как в игре: < playerTileLayer).
-	catalogItemLayer = 1
+	// catalogItemLayer — слой «предметов на земле»; должен совпадать с серверным drop-layer.
+	catalogItemLayer = gamekit.DroppedItemTileLayer
 
 	camZoomMin       = float32(0.25)
 	camZoomMax       = float32(4)

@@ -1,6 +1,7 @@
 package gameclient
 
 import (
+	"encoding/json"
 	"fmt"
 	"image/color"
 	"log"
@@ -266,6 +267,29 @@ func hitPlayer() (target int64, damage int) {
 	return target, damage
 }
 
+func itemDefIDFromInstanceArgs(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var p struct {
+		ItemDefID string `json:"item_def_id"`
+	}
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(p.ItemDefID)
+}
+
+func tileItemDefID(t *gamekit.Tile) string {
+	if t == nil {
+		return ""
+	}
+	if id := itemDefIDFromInstanceArgs(t.InstanceArgs); id != "" {
+		return id
+	}
+	return strings.TrimSpace(t.Texture)
+}
+
 // tryInteractAtCursor — ПКМ по клетке: верхний тайл с texture из каталога (interact) → WS interact.
 func (g *Game) tryInteractAtCursor() {
 	if len(g.interactTextures) == 0 {
@@ -284,7 +308,11 @@ func (g *Game) tryInteractAtCursor() {
 		if t.X != tx || t.Y != ty {
 			continue
 		}
-		if _, isInteract := g.interactTextures[t.Texture]; !isInteract {
+		id := tileItemDefID(t)
+		if id == "" {
+			continue
+		}
+		if _, isInteract := g.interactTextures[id]; !isInteract {
 			continue
 		}
 		if t.Layer > bestL {
@@ -295,7 +323,7 @@ func (g *Game) tryInteractAtCursor() {
 	if best == nil {
 		return
 	}
-	id := strings.TrimSpace(best.Texture)
+	id := tileItemDefID(best)
 	if id == "" {
 		return
 	}
@@ -353,7 +381,11 @@ func (g *Game) tryPickupAtCursor() {
 		if t.X != tx || t.Y != ty {
 			continue
 		}
-		if _, pick := g.pickableTextures[t.Texture]; !pick {
+		id := tileItemDefID(t)
+		if id == "" {
+			continue
+		}
+		if _, pick := g.pickableTextures[id]; !pick {
 			continue
 		}
 		if t.Layer > bestL {
@@ -364,7 +396,7 @@ func (g *Game) tryPickupAtCursor() {
 	if best == nil {
 		return
 	}
-	id := strings.TrimSpace(best.Texture)
+	id := tileItemDefID(best)
 	if id == "" {
 		return
 	}
