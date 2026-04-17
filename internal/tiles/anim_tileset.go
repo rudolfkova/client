@@ -18,31 +18,14 @@ import (
 const AnimFPS = 8.0
 
 var (
-	animMu       sync.RWMutex
-	animMeta     = make(map[string]*animSheet) // base «anim/…» без .png
-	editorAnimT  float64                        // секунды, выставляет редактор
-	editorAnimTM sync.RWMutex
+	animMu   sync.RWMutex
+	animMeta = make(map[string]*animSheet) // base «anim/…» без .png
 )
 
 type animSheet struct {
 	sheet     *ebiten.Image
 	frameCols int
 	rows      int
-}
-
-// SetEditorAnimTime выставляет глобальную фазу анимации anim/* тайлсетов (секунды монотонно).
-// Вызывать каждый кадр из редактора мира и из игрового клиента — иначе кадр анимации залипает на 0.
-func SetEditorAnimTime(sec float64) {
-	editorAnimTM.Lock()
-	editorAnimT = sec
-	editorAnimTM.Unlock()
-}
-
-func editorAnimSeconds() float64 {
-	editorAnimTM.RLock()
-	t := editorAnimT
-	editorAnimTM.RUnlock()
-	return t
 }
 
 // IsAnimTilesetBase true, если base — зарегистрированный анимированный лист (anim/…).
@@ -93,8 +76,8 @@ func RegisterAnimTilesetFromEmbed(embedPath, base string) error {
 	return nil
 }
 
-// animImageForTexture если name = base_index (как TextureKey), base — anim-лист, вернуть кадр для текущего времени редактора.
-func animImageForTexture(name string) *ebiten.Image {
+// animImageForTexture если name = base_index (как TextureKey), base — anim-лист, вернуть кадр для переданного времени.
+func animImageForTexture(name string, animSeconds float64) *ebiten.Image {
 	base, idx1, ok := ParseIndexedTexture(name)
 	if !ok || idx1 < 1 {
 		return nil
@@ -109,8 +92,7 @@ func animImageForTexture(name string) *ebiten.Image {
 	if row < 0 || row >= meta.rows {
 		return nil
 	}
-	t := editorAnimSeconds()
-	fi := int(t*AnimFPS) % meta.frameCols
+	fi := int(animSeconds*AnimFPS) % meta.frameCols
 	if fi < 0 {
 		fi = 0
 	}

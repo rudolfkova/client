@@ -18,10 +18,12 @@ import (
 	"github.com/hajimehoshi/ebiten/v2/vector"
 	"github.com/rudolfkova/grpc_auth/pkg/gamekit"
 
+	"client/internal/app/gamecmd"
+	"client/internal/app/gamemsg"
+	"client/internal/core/worldstate"
 	"client/data"
-	"client/internal/gamews"
 	"client/internal/gamecontent"
-	"client/internal/state"
+	"client/internal/infra/wswriter"
 	"client/internal/tiles"
 	"client/internal/ui"
 	"client/internal/world"
@@ -38,7 +40,7 @@ const (
 	// catalogItemLayer — слой «предметов на земле» (как в игре: < playerTileLayer).
 	catalogItemLayer = 1
 
-	camZoomMin = float32(0.25)
+	camZoomMin       = float32(0.25)
 	camZoomMax       = float32(4)
 	camZoomWheelStep = float32(1.09) // множитель за единицу Wheel() по Y
 )
@@ -48,27 +50,29 @@ const (
 type App struct {
 	wsGame *websocket.Conn
 	msgs   <-chan gamekit.Envelope
-	World  *state.World
+	msgRouter *gamemsg.Router
+	cmdSvc    *gamecmd.Service
+	World  *worldstate.World
 
 	setNames []string
 	setIdx   int
 	tileIdx  int // 0-based внутри набора → на wire Beach_Tile_{tileIdx+1}
 	blocks   bool
 
-	pickTilesets   bool // true: тайлсеты из assets/tileSets, false: корневые PNG в assets/
-	pickCatalog    bool // вкладка «Предметы»: spawn_tile texture=id из catalog, слой catalogItemLayer
+	pickTilesets       bool     // true: тайлсеты из assets/tileSets, false: корневые PNG в assets/
+	pickCatalog        bool     // вкладка «Предметы»: spawn_tile texture=id из catalog, слой catalogItemLayer
 	catalogInteractIDs []string // палитра: interact ∪ pickable (имя поля историческое)
-	catItemIdx           int
-	singleIdx            int
-	paletteScroll  int // вертикаль сетки палитры
-	paletteScrollX int // горизонталь (если сетка шире панели)
-	paletteWidth   int // ширина панели палитры (правая колонка); край — тянуть
-	paletteDrag    bool
-	paletteDragX   int
-	winW, winH     int
+	catItemIdx         int
+	singleIdx          int
+	paletteScroll      int // вертикаль сетки палитры
+	paletteScrollX     int // горизонталь (если сетка шире панели)
+	paletteWidth       int // ширина панели палитры (правая колонка); край — тянуть
+	paletteDrag        bool
+	paletteDragX       int
+	winW, winH         int
 
-	camX, camY   float32 // камера: мир в «логических» px до масштаба
-	camZoom      float32 // только редактор: экран = (мир − cam) * camZoom
+	camX, camY float32 // камера: мир в «логических» px до масштаба
+	camZoom    float32 // только редактор: экран = (мир − cam) * camZoom
 
 	editLayer    int // слой spawn_tile / clear_tile
 	editRotation int // четверти по часовой, 0..3
@@ -99,12 +103,12 @@ type App struct {
 	spawnArgsFirstLine       int // первая видимая строка (для длинного JSON)
 
 	catalogInteractSet map[string]struct{} // texture == id предмета с interact (жёлтая обводка)
-	showTileOverlay    bool                 // F3: координаты и имя предмета на тайлах
+	showTileOverlay    bool                // F3: координаты и имя предмета на тайлах
 
 	// Кисть из тайлсета: прямоугольник в сетке палитры (Ctrl + ЛКМ перетаскивание).
-	tileBrushCol0, tileBrushRow0 int
-	tileBrushW, tileBrushH       int
-	palBrushDrag                 bool
+	tileBrushCol0, tileBrushRow0               int
+	tileBrushW, tileBrushH                     int
+	palBrushDrag                               bool
 	palDragSC, palDragSR, palDragEC, palDragER int
 
 	editorAnimStart time.Time // фаза анимированных тайлсетов anim/*
@@ -112,6 +116,7 @@ type App struct {
 
 func New(wsGame *websocket.Conn, msgs <-chan gamekit.Envelope) *App {
 	_ = ui.FontSource()
+	worldState := worldstate.NewWorld()
 	sets := tiles.EditorTileSets()
 	si := 0
 	for i, s := range sets {
@@ -126,31 +131,46 @@ func New(wsGame *websocket.Conn, msgs <-chan gamekit.Envelope) *App {
 	for _, id := range catInteract {
 		catSet[id] = struct{}{}
 	}
-	return &App{
-		wsGame:               wsGame,
-		msgs:                 msgs,
-		World:                state.NewWorld(),
-		setNames:             sets,
-		setIdx:               si,
-		tileIdx:              0,
-		blocks:               true,
-		pickTilesets:         true,
-		catalogInteractIDs:   catPalette,
-		catalogInteractSet:   catSet,
-		singleIdx:            0,
-		paletteWidth: paletteMinW,
-		winW:         WindowWidth,
-		winH:         WindowHeight,
-		editLayer:    0,
-		editRotation: 0,
-		camZoom:          1,
-		tileBrushW:       1,
-		tileBrushH:       1,
-		tileBrushCol0:    0,
-		tileBrushRow0:    0,
+	app := &App{
+		wsGame:             wsGame,
+		msgs:               msgs,
+		cmdSvc:             gamecmd.NewService(wswriter.NewGameWriter(wsGame)),
+		World:              worldState,
+		setNames:           sets,
+		setIdx:             si,
+		tileIdx:            0,
+		blocks:             true,
+		pickTilesets:       true,
+		catalogInteractIDs: catPalette,
+		catalogInteractSet: catSet,
+		singleIdx:          0,
+		paletteWidth:       paletteMinW,
+		winW:               WindowWidth,
+		winH:               WindowHeight,
+		editLayer:          0,
+		editRotation:       0,
+		camZoom:            1,
+		tileBrushW:         1,
+		tileBrushH:         1,
+		tileBrushCol0:      0,
+		tileBrushRow0:      0,
 
 		editorAnimStart: time.Now(),
 	}
+	app.msgRouter = gamemsg.NewRouter(worldState, app.onSaveWorldResult)
+	return app
+}
+
+func (a *App) onSaveWorldResult(p gamekit.SaveWorldResultPayload) {
+	if p.Ok {
+		a.saveToastBad = false
+		a.saveToast = fmt.Sprintf("Сохранено: «%s» · v%d · %s", p.Name, p.Version, p.WorldID)
+	} else {
+		a.saveToastBad = true
+		a.saveToast = fmt.Sprintf("%s — %s", p.Code, p.Message)
+	}
+	a.saveToastDeadline = time.Now().Add(saveToastDur)
+	a.savePanelOpen = false
 }
 
 func (a *App) incLayer() {
@@ -188,7 +208,7 @@ func (a *App) sendSpawnCatalog(tx, ty int, instanceArgs json.RawMessage) {
 	if len(instanceArgs) > 0 {
 		intent.InstanceArgs = instanceArgs
 	}
-	if err := gamews.Send(a.wsGame, gamekit.TypeSpawnTile, intent); err != nil {
+	if err := a.cmdSvc.SpawnTile(intent); err != nil {
 		log.Printf("editor spawn_tile: %v", err)
 	}
 }
@@ -202,7 +222,7 @@ func (a *App) sendSpawnTextureAt(tx, ty int, texture string) {
 		Texture:  texture,
 		Blocks:   a.blocks,
 	}
-	if err := gamews.Send(a.wsGame, gamekit.TypeSpawnTile, intent); err != nil {
+	if err := a.cmdSvc.SpawnTile(intent); err != nil {
 		log.Printf("editor spawn_tile: %v", err)
 	}
 }
@@ -315,7 +335,7 @@ func (a *App) sendClear(tx, ty int) {
 		layer = catalogItemLayer
 	}
 	cl := gamekit.TileClearIntent{X: tx, Y: ty, Layer: layer}
-	if err := gamews.Send(a.wsGame, gamekit.TypeClearTile, cl); err != nil {
+	if err := a.cmdSvc.ClearTile(cl); err != nil {
 		log.Printf("editor clear_tile: %v", err)
 	}
 }
@@ -528,35 +548,7 @@ func (a *App) texture() string {
 }
 
 func (a *App) drainWebSocket() error {
-	for {
-		select {
-		case msg, ok := <-a.msgs:
-			if !ok {
-				return fmt.Errorf("websocket closed")
-			}
-			if msg.Service == gamekit.ServiceGame && msg.Type == gamekit.TypeSaveWorldResult {
-				var p gamekit.SaveWorldResultPayload
-				if err := json.Unmarshal(msg.Payload, &p); err != nil {
-					log.Printf("editor save_world_result: %v", err)
-					continue
-				}
-				if p.Ok {
-					a.saveToastBad = false
-					a.saveToast = fmt.Sprintf("Сохранено: «%s» · v%d · %s", p.Name, p.Version, p.WorldID)
-				} else {
-					a.saveToastBad = true
-					a.saveToast = fmt.Sprintf("%s — %s", p.Code, p.Message)
-				}
-				a.saveToastDeadline = time.Now().Add(saveToastDur)
-				a.savePanelOpen = false
-				continue
-			}
-			// state: игроки + tiles / tile_updates — см. state.World.ApplyEnvelope
-			a.World.ApplyEnvelope(msg)
-		default:
-			return nil
-		}
-	}
+	return gamemsg.Drain(a.msgs, a.msgRouter.Handle)
 }
 
 func (a *App) trySaveWorld() {
@@ -567,7 +559,7 @@ func (a *App) trySaveWorld() {
 		a.saveToastDeadline = time.Now().Add(4 * time.Second)
 		return
 	}
-	if err := gamews.Send(a.wsGame, gamekit.TypeSaveWorld, gamekit.SaveWorldIntent{Name: name}); err != nil {
+	if err := a.cmdSvc.SaveWorld(name); err != nil {
 		log.Printf("editor save_world: %v", err)
 		a.saveToastBad = true
 		a.saveToast = fmt.Sprintf("Ошибка отправки: %v", err)
@@ -594,7 +586,6 @@ func (a *App) Update() error {
 	if err := a.drainWebSocket(); err != nil {
 		return err
 	}
-	tiles.SetEditorAnimTime(time.Since(a.editorAnimStart).Seconds())
 	if a.saveToast != "" && !a.saveToastDeadline.IsZero() && time.Now().After(a.saveToastDeadline) {
 		a.saveToast = ""
 	}
@@ -873,6 +864,7 @@ func (a *App) Draw(screen *ebiten.Image) {
 		CamX:            a.camX,
 		CamY:            a.camY,
 		CamZoom:         a.camZoom,
+		AnimSeconds:     time.Since(a.editorAnimStart).Seconds(),
 		ResolveTexture: func(tex string) string {
 			return tiles.ResolvedItemTexture(tex, func(id string) bool {
 				return gamecontent.IsCatalogItemID(data.ContentCatalogJSON, id)

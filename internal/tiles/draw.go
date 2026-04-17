@@ -24,7 +24,7 @@ var (
 
 // ImageForTexture картинка для ключа (тайлсет Base_N или одиночный PNG из корня assets/); nil если неизвестно.
 func ImageForTexture(name string) *ebiten.Image {
-	return imageForTexture(name)
+	return imageForTexture(name, 0)
 }
 
 // EditorSingleTextureKeys отдельные PNG из корня assets/ (не tileSets), ключ = имя файла без .png.
@@ -37,7 +37,7 @@ func EditorSingleTextureKeys() []string {
 	return keys
 }
 
-func imageForTexture(name string) *ebiten.Image {
+func imageForTexture(name string, animSeconds float64) *ebiten.Image {
 	imgMu.Lock()
 	if img, ok := imgByID[name]; ok {
 		imgMu.Unlock()
@@ -48,7 +48,7 @@ func imageForTexture(name string) *ebiten.Image {
 	// Индексированное имя: статический тайлсет или anim/… (строка листа = кадры по X).
 	if base, _, ok := ParseIndexedTexture(name); ok {
 		ensureTilesetLoaded(base)
-		if img := animImageForTexture(name); img != nil {
+		if img := animImageForTexture(name, animSeconds); img != nil {
 			return img
 		}
 		imgMu.Lock()
@@ -107,6 +107,8 @@ type DrawOpts struct {
 	CamX, CamY float32
 	// CamZoom — масштаб карты (только редактор); 0 или отрицательное = 1. В игре не задавать.
 	CamZoom float32
+	// AnimSeconds - фаза анимации anim/* в секундах.
+	AnimSeconds float64
 	// ResolveTexture — если задан, подменяет ключ текстуры перед загрузкой (плейсхолдер предметов и т.д.).
 	ResolveTexture func(tex string) string
 }
@@ -129,7 +131,7 @@ func Draw(screen *ebiten.Image, t gamekit.Tile, opts DrawOpts) {
 	if opts.ResolveTexture != nil {
 		tex = opts.ResolveTexture(tex)
 	}
-	img := imageForTexture(tex)
+	img := imageForTexture(tex, opts.AnimSeconds)
 	if img != nil {
 		DrawTextureScaledRotated(screen, img, x0+ts/2, y0+ts/2, ts, t.Rotation)
 	} else {
@@ -157,7 +159,7 @@ func DrawGhost(screen *ebiten.Image, tx, ty int, texture string, rotationQuarter
 	if opts.ResolveTexture != nil {
 		tex = opts.ResolveTexture(tex)
 	}
-	img := imageForTexture(tex)
+	img := imageForTexture(tex, opts.AnimSeconds)
 	if img != nil {
 		drawTextureScaledRotatedAlpha(screen, img, x0+ts/2, y0+ts/2, ts, rotationQuarter, alpha)
 	} else {

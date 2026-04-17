@@ -17,15 +17,18 @@ import (
 	"github.com/hajimehoshi/ebiten/v2/vector"
 	"github.com/rudolfkova/grpc_auth/pkg/gamekit"
 
+	"client/internal/app/gamecmd"
+	"client/internal/app/gamemsg"
 	"client/data"
 	"client/internal/gamecontent"
-	"client/internal/gamews"
+	"client/internal/infra/wswriter"
 	"client/internal/lobby"
 	"client/internal/mapfog"
 	"client/internal/playeranim"
-	"client/internal/state"
+	"client/internal/core/worldstate"
 	"client/internal/tiles"
 	"client/internal/ui"
+	"client/internal/ws"
 	"client/internal/world"
 )
 
@@ -67,14 +70,16 @@ type Game struct {
 	wsChat *websocket.Conn
 
 	wsMsgs      <-chan gamekit.Envelope
-	wsLobbyPush <-chan lobby.SubscribeMessage
+	wsLobbyPush <-chan ws.SubscribeMessage
+	msgRouter   *gamemsg.Router
+	cmdSvc      *gamecmd.Service
 
-	World *state.World
+	World *worldstate.World
 
 	// Последний отправленный на сервер move (dx,dy); шлём только при смене — без спама 60/s.
 	lastSentMoveDx, lastSentMoveDy int
 	camX, camY                     float32
-	visTile                map[int64]struct{ X, Y float32 }
+	visTile                        map[int64]struct{ X, Y float32 }
 
 	lobbyLines    []lobby.Line
 	lobbyDraft    string
@@ -94,7 +99,7 @@ type Game struct {
 	interactTextures map[string]struct{} // texture == id из catalog с interact
 	pickableTextures map[string]struct{} // texture == id из catalog с pickable (подбор СКМ)
 
-	worldFog *mapfog.Fog // туман в клетках без слоя 0 (после всех тайлов, «слой 10»)
+	worldFog *mapfog.Fog       // туман в клетках без слоя 0 (после всех тайлов, «слой 10»)
 	fogMode  mapfog.RenderMode // F4: туман+блюр → только туман → только блюр → выкл
 
 	// animTilesStart — фаза anim/* тайлсетов (как в редакторе: tiles.SetEditorAnimTime).
@@ -104,8 +109,9 @@ type Game struct {
 	invPickSlot string
 }
 
-func NewGame(accessToken, refreshToken string, userID int64, lobbyChatID int64, characterDisplayName string, wsChat *websocket.Conn, wsGame *websocket.Conn, wsMsgs <-chan gamekit.Envelope, wsLobbyPush <-chan lobby.SubscribeMessage, lobbyLines []lobby.Line) *Game {
+func NewGame(accessToken, refreshToken string, userID int64, lobbyChatID int64, characterDisplayName string, wsChat *websocket.Conn, wsGame *websocket.Conn, wsMsgs <-chan gamekit.Envelope, wsLobbyPush <-chan ws.SubscribeMessage, lobbyLines []lobby.Line) *Game {
 	_ = ui.FontSource()
+	worldState := worldstate.NewWorld()
 	return &Game{
 		jwt:     accessToken,
 		refresh: refreshToken,
@@ -116,8 +122,10 @@ func NewGame(accessToken, refreshToken string, userID int64, lobbyChatID int64, 
 
 		wsMsgs:      wsMsgs,
 		wsLobbyPush: wsLobbyPush,
+		msgRouter:   gamemsg.NewRouter(worldState, nil),
+		cmdSvc:      gamecmd.NewService(wswriter.NewGameWriter(wsGame)),
 
-		World:          state.NewWorld(),
+		World:          worldState,
 		visTile:        make(map[int64]struct{ X, Y float32 }),
 		lobbyLines:     lobbyLines,
 		lobbyChatSize:  13,
@@ -139,15 +147,12 @@ func NewGame(accessToken, refreshToken string, userID int64, lobbyChatID int64, 
 }
 
 func (g *Game) Update() error {
-	tiles.SetEditorAnimTime(time.Since(g.animTilesStart).Seconds())
 	g.tickStatsPanelSlide()
+	if err := gamemsg.Drain(g.wsMsgs, g.msgRouter.Handle); err != nil {
+		return err
+	}
 	for {
 		select {
-		case msg, ok := <-g.wsMsgs:
-			if !ok {
-				return fmt.Errorf("websocket closed")
-			}
-			g.World.ApplyEnvelope(msg)
 		case push, ok := <-g.wsLobbyPush:
 			if !ok {
 				return fmt.Errorf("lobby websocket closed")
@@ -165,74 +170,76 @@ func (g *Game) Update() error {
 			}
 			g.chatBubbles[push.SenderID] = chatBubble{text: bt, until: time.Now().Add(chatBubbleDur)}
 		default:
-			if inpututil.IsKeyJustPressed(ebiten.KeyF4) {
-				g.fogMode = mapfog.NextRenderMode(g.fogMode)
-			}
-			if inpututil.IsKeyJustPressed(ebiten.KeyTab) {
-				g.lobbyFocused = !g.lobbyFocused
-			}
-			if g.lobbyFocused && ebiten.IsFocused() {
-				for _, ch := range ebiten.AppendInputChars(nil) {
-					if ch == '\n' || ch == '\r' {
-						continue
-					}
-					if utf8.RuneCountInString(g.lobbyDraft) >= lobby.MaxDraftRunes {
-						break
-					}
-					g.lobbyDraft += string(ch)
-				}
-				if inpututil.IsKeyJustPressed(ebiten.KeyBackspace) && g.lobbyDraft != "" {
-					_, sz := utf8.DecodeLastRuneInString(g.lobbyDraft)
-					g.lobbyDraft = g.lobbyDraft[:len(g.lobbyDraft)-sz]
-				}
-				if inpututil.IsKeyJustPressed(ebiten.KeyEnter) {
-					g.sendLobbyLine()
-				}
-			} else {
-				if inpututil.IsKeyJustPressed(ebiten.KeyC) {
-					g.statsPanelOpen = !g.statsPanelOpen
-				}
-				if g.statsSlide < 0.4 && inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) {
-					mx, my := ebiten.CursorPosition()
-					const tabW = 12
-					if mx >= 0 && mx < tabW && my >= 50 && my < 50+54 {
-						g.statsPanelOpen = !g.statsPanelOpen
-					}
-				}
-				dx, dy := arrowDirection()
-				if dx != g.lastSentMoveDx || dy != g.lastSentMoveDy {
-					if err := gamews.Send(g.wsGame, gamekit.TypeMove, gamekit.MoveIntent{DX: dx, DY: dy}); err != nil {
-						log.Printf("ws write: %v", err)
-						return err
-					}
-					g.lastSentMoveDx, g.lastSentMoveDy = dx, dy
-				}
-				target, damage := hitPlayer()
-				if damage != 0 && target != 0 {
-					if err := gamews.Send(g.wsGame, gamekit.TypeHit, gamekit.HitIntent{TargetID: target, Damage: damage}); err != nil {
-						log.Printf("ws write: %v", err)
-						return err
-					}
-				}
-				ww, wh := ebiten.WindowSize()
-				if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonRight) {
-					if !g.consumeInventoryBarRMB(ww, wh) {
-						g.tryInteractAtCursor()
-					}
-				}
-				if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonMiddle) {
-					g.tryPickupAtCursor()
-				}
-			}
-			g.tickPlayerVis()
-			g.tickDemoWalkAnims()
-			g.pruneChatBubbles()
-			g.tickCamera()
-			ww, wh := ebiten.WindowSize()
-			g.handleInventoryBarInput(ww, wh)
-			return nil
+			goto inputPhase
 		}
 	}
+inputPhase:
+	if inpututil.IsKeyJustPressed(ebiten.KeyF4) {
+		g.fogMode = mapfog.NextRenderMode(g.fogMode)
+	}
+	if inpututil.IsKeyJustPressed(ebiten.KeyTab) {
+		g.lobbyFocused = !g.lobbyFocused
+	}
+	if g.lobbyFocused && ebiten.IsFocused() {
+		for _, ch := range ebiten.AppendInputChars(nil) {
+			if ch == '\n' || ch == '\r' {
+				continue
+			}
+			if utf8.RuneCountInString(g.lobbyDraft) >= lobby.MaxDraftRunes {
+				break
+			}
+			g.lobbyDraft += string(ch)
+		}
+		if inpututil.IsKeyJustPressed(ebiten.KeyBackspace) && g.lobbyDraft != "" {
+			_, sz := utf8.DecodeLastRuneInString(g.lobbyDraft)
+			g.lobbyDraft = g.lobbyDraft[:len(g.lobbyDraft)-sz]
+		}
+		if inpututil.IsKeyJustPressed(ebiten.KeyEnter) {
+			g.sendLobbyLine()
+		}
+	} else {
+		if inpututil.IsKeyJustPressed(ebiten.KeyC) {
+			g.statsPanelOpen = !g.statsPanelOpen
+		}
+		if g.statsSlide < 0.4 && inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) {
+			mx, my := ebiten.CursorPosition()
+			const tabW = 12
+			if mx >= 0 && mx < tabW && my >= 50 && my < 50+54 {
+				g.statsPanelOpen = !g.statsPanelOpen
+			}
+		}
+		dx, dy := arrowDirection()
+		if dx != g.lastSentMoveDx || dy != g.lastSentMoveDy {
+			if err := g.cmdSvc.Move(dx, dy); err != nil {
+				log.Printf("ws write: %v", err)
+				return err
+			}
+			g.lastSentMoveDx, g.lastSentMoveDy = dx, dy
+		}
+		target, damage := hitPlayer()
+		if damage != 0 && target != 0 {
+			if err := g.cmdSvc.Hit(target, damage); err != nil {
+				log.Printf("ws write: %v", err)
+				return err
+			}
+		}
+		ww, wh := ebiten.WindowSize()
+		if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonRight) {
+			if !g.consumeInventoryBarRMB(ww, wh) {
+				g.tryInteractAtCursor()
+			}
+		}
+		if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonMiddle) {
+			g.tryPickupAtCursor()
+		}
+	}
+	g.tickPlayerVis()
+	g.tickDemoWalkAnims()
+	g.pruneChatBubbles()
+	g.tickCamera()
+	ww, wh := ebiten.WindowSize()
+	g.handleInventoryBarInput(ww, wh)
+	return nil
 }
 
 func arrowDirection() (dx, dy int) {
@@ -300,7 +307,7 @@ func (g *Game) tryInteractAtCursor() {
 		ClickY:     &iy,
 		ClickLayer: &L,
 	}
-	if err := gamews.Send(g.wsGame, gamekit.TypeInteract, intent); err != nil {
+	if err := g.cmdSvc.Interact(intent); err != nil {
 		log.Printf("ws interact: %v", err)
 	}
 }
@@ -369,7 +376,7 @@ func (g *Game) tryPickupAtCursor() {
 		ClickY:     &iy,
 		ClickLayer: &L,
 	}
-	if err := gamews.Send(g.wsGame, gamekit.TypePickupItem, intent); err != nil {
+	if err := g.cmdSvc.Pickup(intent); err != nil {
 		log.Printf("ws pickup_item: %v", err)
 	}
 }
@@ -494,6 +501,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	camOpts := tiles.DrawOpts{
 		CamX: camX,
 		CamY: camY,
+		AnimSeconds: time.Since(g.animTilesStart).Seconds(),
 		ResolveTexture: func(tex string) string {
 			return tiles.ResolvedItemTexture(tex, func(id string) bool {
 				return gamecontent.IsCatalogItemID(data.ContentCatalogJSON, id)

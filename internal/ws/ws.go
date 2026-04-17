@@ -4,15 +4,24 @@ import (
 	"encoding/json"
 	"log"
 	"net/url"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/rudolfkova/grpc_auth/pkg/gamekit"
 
 	"client/internal/config"
-	"client/internal/lobby"
 )
 
 const GameChanCap = 256
+
+// SubscribeMessage — push с /ws/subscribe (не envelope игры).
+type SubscribeMessage struct {
+	ID        int64     `json:"id"`
+	ChatID    int64     `json:"chat_id"`
+	SenderID  int64     `json:"sender_id"`
+	Text      string    `json:"text"`
+	CreatedAt time.Time `json:"created_at"`
+}
 
 func Connect(path, jwt string) (*websocket.Conn, error) {
 	return dialWS(path, jwt, nil)
@@ -74,7 +83,7 @@ func RunGameReadPump(conn *websocket.Conn, msgs chan<- gamekit.Envelope, path st
 	}
 }
 
-func RunSubscribeReadPump(conn *websocket.Conn, msgs chan<- lobby.SubscribeMessage, path string) {
+func RunSubscribeReadPump(conn *websocket.Conn, msgs chan<- SubscribeMessage, path string) {
 	defer close(msgs)
 	for {
 		_, raw, err := conn.ReadMessage()
@@ -86,7 +95,7 @@ func RunSubscribeReadPump(conn *websocket.Conn, msgs chan<- lobby.SubscribeMessa
 			}
 			return
 		}
-		var m lobby.SubscribeMessage
+		var m SubscribeMessage
 		if err := json.Unmarshal(raw, &m); err != nil {
 			log.Printf("ws: subscribe skip invalid json: %v", err)
 			continue

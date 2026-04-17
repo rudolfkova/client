@@ -15,7 +15,6 @@ import (
 
 	"client/data"
 	"client/internal/gamecontent"
-	"client/internal/gamews"
 	"client/internal/tiles"
 	"client/internal/ui"
 )
@@ -127,7 +126,7 @@ func (g *Game) tryDropFromSlot(slot string) {
 	if strings.TrimSpace(slotItemID(pl.Inventory, slot)) == "" {
 		return
 	}
-	if err := gamews.Send(g.wsGame, gamekit.TypeDropItem, gamekit.DropItemIntent{From: slot}); err != nil {
+	if err := g.cmdSvc.DropItem(slot); err != nil {
 		log.Printf("ws drop_item: %v", err)
 	}
 	g.invPickSlot = ""
@@ -174,7 +173,7 @@ func (g *Game) onInventorySlotClick(slot string) {
 		g.invPickSlot = ""
 		return
 	}
-	if err := gamews.Send(g.wsGame, gamekit.TypeInventoryMove, gamekit.InventoryMoveIntent{From: from, To: to}); err != nil {
+	if err := g.cmdSvc.InventoryMove(from, to); err != nil {
 		log.Printf("ws inventory_move: %v", err)
 	}
 	g.invPickSlot = ""
