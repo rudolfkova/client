@@ -100,6 +100,39 @@ func (g *Game) inventorySlotRects(ww, wh int) []invSlotRect {
 	return out
 }
 
+// consumeInventoryBarRMB — ПКМ по полосе слотов: выбросить предмет (drop_item), не пропуская клик в мир.
+// Возвращает true, если курсор был над панелью инвентаря (клик «съеден»).
+func (g *Game) consumeInventoryBarRMB(ww, wh int) bool {
+	if g.lobbyFocused {
+		return false
+	}
+	if !inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonRight) {
+		return false
+	}
+	mx, my := ebiten.CursorPosition()
+	for _, r := range g.inventorySlotRects(ww, wh) {
+		if mx >= r.x0 && mx < r.x0+r.w && my >= r.y0 && my < r.y0+r.h {
+			g.tryDropFromSlot(r.key)
+			return true
+		}
+	}
+	return false
+}
+
+func (g *Game) tryDropFromSlot(slot string) {
+	pl, ok := g.World.Players[g.userID]
+	if !ok {
+		return
+	}
+	if strings.TrimSpace(slotItemID(pl.Inventory, slot)) == "" {
+		return
+	}
+	if err := gamews.Send(g.wsGame, gamekit.TypeDropItem, gamekit.DropItemIntent{From: slot}); err != nil {
+		log.Printf("ws drop_item: %v", err)
+	}
+	g.invPickSlot = ""
+}
+
 func (g *Game) handleInventoryBarInput(ww, wh int) {
 	if g.lobbyFocused {
 		return
@@ -158,9 +191,9 @@ func (g *Game) drawInventoryBar(screen *ebiten.Image, ww, wh int) {
 		yTitle = 0
 	}
 	titleFace := &textv2.GoTextFace{Source: ui.FontSource(), Size: 12}
-	hint := "Инвентарь: два клика по слотам — обмен"
+	hint := "Инвентарь: ЛКМ×2 — обмен слотов; ПКМ по слоту с предметом — выбросить"
 	if g.invPickSlot != "" {
-		hint = fmt.Sprintf("Выбран «%s» — другой слот или Esc", invSlotShortTitle(g.invPickSlot))
+		hint = fmt.Sprintf("Выбран «%s» — другой слот (ЛКМ) или Esc; ПКМ по любому слоту с предметом — выбросить", invSlotShortTitle(g.invPickSlot))
 	}
 	tw, _ := textv2.Measure(hint, titleFace, 0)
 	tx := float32(ww/2) - float32(tw)/2

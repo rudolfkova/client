@@ -214,8 +214,11 @@ func (g *Game) Update() error {
 						return err
 					}
 				}
+				ww, wh := ebiten.WindowSize()
 				if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonRight) {
-					g.tryInteractAtCursor()
+					if !g.consumeInventoryBarRMB(ww, wh) {
+						g.tryInteractAtCursor()
+					}
 				}
 				if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonMiddle) {
 					g.tryPickupAtCursor()
