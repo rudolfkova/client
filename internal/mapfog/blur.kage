@@ -9,19 +9,42 @@ package main
 var BlurPx float
 
 func Fragment(dstPos vec4, srcPos vec2, color vec4) vec4 {
-	off := vec2(BlurPx, BlurPx)
+	// Мягкий многоточечный kernel: сильнее прячет грубые формы и убирает «квадратную» пикселизацию.
+	r1 := BlurPx * 0.52
+	r2 := BlurPx * 1.18
+	r3 := BlurPx * 1.85
 
-	sum := imageSrc0At(srcPos) * 0.2
+	sum := imageSrc0At(srcPos) * 0.16
 
-	sum += imageSrc0At(srcPos + vec2(off.x, 0.0)) * 0.15
-	sum += imageSrc0At(srcPos - vec2(off.x, 0.0)) * 0.15
-	sum += imageSrc0At(srcPos + vec2(0.0, off.y)) * 0.15
-	sum += imageSrc0At(srcPos - vec2(0.0, off.y)) * 0.15
+	// Ближний радиус.
+	sum += imageSrc0At(srcPos+vec2(r1, 0.0)) * 0.072
+	sum += imageSrc0At(srcPos-vec2(r1, 0.0)) * 0.072
+	sum += imageSrc0At(srcPos+vec2(0.0, r1)) * 0.072
+	sum += imageSrc0At(srcPos-vec2(0.0, r1)) * 0.072
+	sum += imageSrc0At(srcPos+vec2(r1, r1)) * 0.045
+	sum += imageSrc0At(srcPos+vec2(-r1, r1)) * 0.045
+	sum += imageSrc0At(srcPos+vec2(r1, -r1)) * 0.045
+	sum += imageSrc0At(srcPos+vec2(-r1, -r1)) * 0.045
 
-	sum += imageSrc0At(srcPos + off) * 0.05
-	sum += imageSrc0At(srcPos + vec2(-off.x, off.y)) * 0.05
-	sum += imageSrc0At(srcPos + vec2(off.x, -off.y)) * 0.05
-	sum += imageSrc0At(srcPos - off) * 0.05
+	// Средний радиус.
+	sum += imageSrc0At(srcPos+vec2(r2, 0.0)) * 0.050
+	sum += imageSrc0At(srcPos-vec2(r2, 0.0)) * 0.050
+	sum += imageSrc0At(srcPos+vec2(0.0, r2)) * 0.050
+	sum += imageSrc0At(srcPos-vec2(0.0, r2)) * 0.050
+	sum += imageSrc0At(srcPos+vec2(r2, r2)) * 0.030
+	sum += imageSrc0At(srcPos+vec2(-r2, r2)) * 0.030
+	sum += imageSrc0At(srcPos+vec2(r2, -r2)) * 0.030
+	sum += imageSrc0At(srcPos+vec2(-r2, -r2)) * 0.030
+
+	// Дальний радиус для «молочного» укрытия дальних контуров.
+	sum += imageSrc0At(srcPos+vec2(r3, 0.0)) * 0.018
+	sum += imageSrc0At(srcPos-vec2(r3, 0.0)) * 0.018
+	sum += imageSrc0At(srcPos+vec2(0.0, r3)) * 0.018
+	sum += imageSrc0At(srcPos-vec2(0.0, r3)) * 0.018
+	sum += imageSrc0At(srcPos+vec2(r3*0.72, r3*0.72)) * 0.012
+	sum += imageSrc0At(srcPos+vec2(-r3*0.72, r3*0.72)) * 0.012
+	sum += imageSrc0At(srcPos+vec2(r3*0.72, -r3*0.72)) * 0.012
+	sum += imageSrc0At(srcPos+vec2(-r3*0.72, -r3*0.72)) * 0.012
 
 	return sum
 }

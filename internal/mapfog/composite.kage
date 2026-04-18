@@ -7,6 +7,13 @@ package main
 func Fragment(dstPos vec4, srcPos vec2, color vec4) vec4 {
 	orig := imageSrc0At(srcPos)
 	blur := imageSrc1At(srcPos)
-	m := clamp(imageSrc2At(srcPos).a, 0.0, 1.0)
+	// Чуть смягчаем маску, чтобы переход блюра по границе был визуально непрерывным.
+	m := imageSrc2At(srcPos).a * 0.5
+	m += imageSrc2At(srcPos+vec2(1.25, 0.0)).a * 0.125
+	m += imageSrc2At(srcPos-vec2(1.25, 0.0)).a * 0.125
+	m += imageSrc2At(srcPos+vec2(0.0, 1.25)).a * 0.125
+	m += imageSrc2At(srcPos-vec2(0.0, 1.25)).a * 0.125
+	m = clamp(m, 0.0, 1.0)
+	m = m * m * (3.0 - 2.0*m)
 	return orig*(1.0-m) + blur*m
 }

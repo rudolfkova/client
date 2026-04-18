@@ -24,7 +24,7 @@ var compositeKage []byte
 
 const (
 	// blurStrengthPx — полноэкранный блюр (маска смягчает края клеток).
-	blurStrengthPx = float32(3)
+	blurStrengthPx = float32(6.2)
 )
 
 // RenderMode — что рисовать по пустым клеткам слоя 0. Цикл: All → FogOnly → BlurOnly → None.

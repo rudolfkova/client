@@ -53,17 +53,17 @@ func topDriftY() float {
 
 // alphaScale — множитель к яркости шума для итоговой прозрачности (0…1): больше — плотнее туман.
 func fogAlphaScale() float {
-	return 0.92
+	return 1.0
 }
 
 // Вклад нижнего слоя в общую плотность.
 func backAlphaScale() float {
-	return 0.60
+	return 0.72
 }
 
 // Вклад верхнего слоя: добавляет «живость» поверх основной массы.
 func topAlphaScale() float {
-	return 0.30
+	return 0.36
 }
 
 // Быстрый хеш (дешёвый шум)
@@ -124,20 +124,23 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4) vec4 {
 	pTop := worldPx*topNoiseCells()/ds + vec2(Time*topDriftX(), Time*topDriftY())
 
 	base := cloudFBM(p)
-	structure := smoothstep(0.38, 0.76, base)
+	structure := smoothstep(0.30, 0.72, base)
 	// Крупная модуляция на очень низкой частоте: облака выглядят массивнее и менее «пластилиново».
 	macro := 0.65 + 0.35*valueNoise(p*0.32+vec2(Time*0.07, -Time*0.05))
 	mainFog := structure * macro
 
 	// Нижний слой: мягкая подложка, закрывает «пустоты» и добавляет глубину.
 	backBase := cloudFBMLite(pBack)
-	backFog := smoothstep(0.30, 0.70, backBase) * backAlphaScale()
+	backFog := smoothstep(0.22, 0.64, backBase) * backAlphaScale()
 	// Верхний слой: более быстрые фрагменты/прожилки поверх.
 	topBase := cloudFBMLite(pTop + vec2(13.7, 47.3))
-	topFog := smoothstep(0.52, 0.82, topBase) * topAlphaScale()
+	topFog := smoothstep(0.42, 0.78, topBase) * topAlphaScale()
 	// Комбинирование слоёв с мягкими ограничениями, чтобы не «забетонировать» экран.
-	fog := backFog + mainFog*(1.0-0.30*backFog)
+	fog := backFog + mainFog*(1.0-0.22*backFog)
 	fog += topFog * (1.0 - 0.45*fog)
+	// Низкочастотная «подложка», чтобы у тумана было меньше пустых дыр.
+	fill := 0.12 + 0.08*valueNoise(pBack*0.45+vec2(17.0, -9.0)+vec2(Time*0.03, 0.0))
+	fog = max(fog, fill)
 	// Лёгкая мировая вариация, чтобы убрать ощущение «плоской пелены».
 	fog *= 0.85 + 0.15*clamp(fract(worldPx.y*0.00026+worldPx.x*0.00009), 0.4, 1.0)
 	fog = clamp(fog, 0.0, 1.0)
