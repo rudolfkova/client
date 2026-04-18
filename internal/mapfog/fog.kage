@@ -3,17 +3,25 @@
 package main
 
 var Time float
-// EdgeFade 0…1 — смягчение у границы с «землёй» (слой 0), задаётся из Go по расстоянию до ближайшей занятой клетки.
-var EdgeFade float
 // CamX, CamY — смещение камеры в px (как у тайлов): мир в точке экрана = dstPos + Cam.
 var CamX float
 var CamY float
 
 // --- Подгонка вручную (не uniform): меняй только литералы в return ниже. ---
 
-// noiseCells — плотность шума в мировых px (через нормировку на размер dst): больше → мельче «зерно».
+// noiseCells — плотность шума в мировых px: больше → мельче «облака».
 func fogNoiseCells() float {
-	return 180.0
+	return 30.0
+}
+
+// backNoiseCells — масштаб нижнего слоя: меньше значения -> крупнее и мягче «подложка».
+func backNoiseCells() float {
+	return 30.0
+}
+
+// topNoiseCells — верхний слой: чуть мельче и более рваный.
+func topNoiseCells() float {
+	return 30.0
 }
 
 // driftX, driftY — скорость дрейфа тумана (множители к Time в UV-пространстве).
@@ -25,9 +33,37 @@ func fogDriftY() float {
 	return 0.15 * 2.0
 }
 
+// Нижний слой движется заметно медленнее.
+func backDriftX() float {
+	return 0.13 * 2.0
+}
+
+func backDriftY() float {
+	return 0.06 * 2.0
+}
+
+// Верхний слой движется быстрее остальных.
+func topDriftX() float {
+	return 0.55 * 2.0
+}
+
+func topDriftY() float {
+	return 0.30 * 2.0
+}
+
 // alphaScale — множитель к яркости шума для итоговой прозрачности (0…1): больше — плотнее туман.
 func fogAlphaScale() float {
-	return 0.8
+	return 0.92
+}
+
+// Вклад нижнего слоя в общую плотность.
+func backAlphaScale() float {
+	return 0.60
+}
+
+// Вклад верхнего слоя: добавляет «живость» поверх основной массы.
+func topAlphaScale() float {
+	return 0.30
 }
 
 // Быстрый хеш (дешёвый шум)
@@ -35,19 +71,79 @@ func hash(p vec2) float {
 	return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453)
 }
 
+// Мягкий value noise через билинейную интерполяцию 4 углов.
+func valueNoise(p vec2) float {
+	i := floor(p)
+	f := fract(p)
+	u := f*f*(3.0-2.0*f)
+	a := hash(i)
+	b := hash(i + vec2(1.0, 0.0))
+	c := hash(i + vec2(0.0, 1.0))
+	d := hash(i + vec2(1.0, 1.0))
+	return mix(mix(a, b, u.x), mix(c, d, u.x), u.y)
+}
+
+// Облачный FBM с 3 октавами: заметно красивее клеточного хеша, но остаётся недорогим.
+func cloudFBM(p vec2) float {
+	n := 0.0
+	amp := 0.58
+	freq := 1.0
+	for i := 0; i < 3; i++ {
+		n += valueNoise(p*freq) * amp
+		freq *= 2.03
+		amp *= 0.5
+	}
+	return n
+}
+
+// Более дешёвый и мягкий FBM для фонового (нижнего) слоя.
+func cloudFBMLite(p vec2) float {
+	n := 0.0
+	amp := 0.65
+	freq := 1.0
+	for i := 0; i < 2; i++ {
+		n += valueNoise(p*freq) * amp
+		freq *= 1.95
+		amp *= 0.5
+	}
+	return n
+}
+
 func Fragment(dstPos vec4, srcPos vec2, color vec4) vec4 {
+	// imageSrc0.a — маска пустых клеток (0…1), включая edgeFade.
+	mask := clamp(imageSrc0At(srcPos).a, 0.0, 1.0)
+	if mask <= 0.001 {
+		return vec4(0.0)
+	}
+
 	// Мировые пиксели (как GridPad + tile*TileSize): шум «ездит» с картой при скролле камеры.
 	worldPx := dstPos.xy + vec2(CamX, CamY)
 	ds := imageDstSize()
 	p := worldPx*fogNoiseCells()/ds + vec2(Time*fogDriftX(), Time*fogDriftY())
+	pBack := worldPx*backNoiseCells()/ds + vec2(Time*backDriftX(), Time*backDriftY())
+	pTop := worldPx*topNoiseCells()/ds + vec2(Time*topDriftX(), Time*topDriftY())
 
-	fog := hash(floor(p))
-	fog = smoothstep(0.3, 0.7, fog)
-	// Лёгкая модуляция по миру (не по экрану), чтобы не было «прилипшего к окну» градиента.
-	fog *= 0.55 + 0.45*clamp(fract(worldPx.y*0.00035+worldPx.x*0.00012), 0.35, 1.0)
+	base := cloudFBM(p)
+	structure := smoothstep(0.38, 0.76, base)
+	// Крупная модуляция на очень низкой частоте: облака выглядят массивнее и менее «пластилиново».
+	macro := 0.65 + 0.35*valueNoise(p*0.32+vec2(Time*0.07, -Time*0.05))
+	mainFog := structure * macro
 
-	fogColor := vec3(0.75, 0.75, 0.8)
-	a := fog * fogAlphaScale() * EdgeFade
+	// Нижний слой: мягкая подложка, закрывает «пустоты» и добавляет глубину.
+	backBase := cloudFBMLite(pBack)
+	backFog := smoothstep(0.30, 0.70, backBase) * backAlphaScale()
+	// Верхний слой: более быстрые фрагменты/прожилки поверх.
+	topBase := cloudFBMLite(pTop + vec2(13.7, 47.3))
+	topFog := smoothstep(0.52, 0.82, topBase) * topAlphaScale()
+	// Комбинирование слоёв с мягкими ограничениями, чтобы не «забетонировать» экран.
+	fog := backFog + mainFog*(1.0-0.30*backFog)
+	fog += topFog * (1.0 - 0.45*fog)
+	// Лёгкая мировая вариация, чтобы убрать ощущение «плоской пелены».
+	fog *= 0.85 + 0.15*clamp(fract(worldPx.y*0.00026+worldPx.x*0.00009), 0.4, 1.0)
+	fog = clamp(fog, 0.0, 1.0)
+
+	fogColor := vec3(0.74, 0.75, 0.82)
+	a := fog * fogAlphaScale() * mask
 	// Премультиплицированный RGBA — иначе при малых a Ebiten даёт «молочную» заливку клетки полным fogColor.
 	return vec4(fogColor*a, a)
 }

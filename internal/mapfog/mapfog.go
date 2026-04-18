@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/hajimehoshi/ebiten/v2/vector"
 	"github.com/rudolfkova/grpc_auth/pkg/gamekit"
 
 	"client/internal/world"
@@ -45,6 +44,7 @@ func NextRenderMode(m RenderMode) RenderMode {
 
 type voidCell struct {
 	rx0, ry0, tw, th int
+	tx, ty           int
 	edgeFade         float32
 }
 
@@ -57,6 +57,7 @@ type Fog struct {
 	scratch    *ebiten.Image
 	blurred    *ebiten.Image
 	mask       *ebiten.Image
+	white      *ebiten.Image
 	bufW       int
 	bufH       int
 	voidBuf    []voidCell
@@ -66,6 +67,8 @@ type Fog struct {
 // NewFog компилирует шейдеры; при ошибке соответствующий указатель nil.
 func NewFog() *Fog {
 	f := &Fog{start: time.Now()}
+	f.white = ebiten.NewImage(1, 1)
+	f.white.Fill(color.White)
 	if sh, err := ebiten.NewShader(fogKage); err != nil {
 		log.Printf("mapfog: fog shader: %v", err)
 	} else {
@@ -85,7 +88,7 @@ func NewFog() *Fog {
 }
 
 func (f *Fog) ensureBuffers(dst *ebiten.Image) {
-	if f == nil || f.blurSh == nil || f.compositeSh == nil {
+	if f == nil {
 		return
 	}
 	ww, wh := dst.Bounds().Dx(), dst.Bounds().Dy()
@@ -101,7 +104,73 @@ func (f *Fog) ensureBuffers(dst *ebiten.Image) {
 	f.mask = ebiten.NewImage(ww, wh)
 }
 
-func (f *Fog) blurComposite(dst *ebiten.Image, cells []voidCell, ww, wh int) {
+func (f *Fog) buildMask(cells []voidCell) {
+	if f.mask == nil {
+		return
+	}
+	f.mask.Clear()
+
+	if len(cells) == 0 || f.white == nil {
+		return
+	}
+
+	fades := make(map[tileXY]float32, len(cells))
+	for i := range cells {
+		c := &cells[i]
+		fades[tileXY{c.tx, c.ty}] = c.edgeFade
+	}
+
+	avg4 := func(a, b, c, d float32) float32 { return 0.25 * (a + b + c + d) }
+	cornerAlpha := func(cx, cy int) float32 {
+		return avg4(
+			fades[tileXY{cx - 1, cy - 1}],
+			fades[tileXY{cx, cy - 1}],
+			fades[tileXY{cx - 1, cy}],
+			fades[tileXY{cx, cy}],
+		)
+	}
+
+	var verts []ebiten.Vertex
+	var inds []uint16
+	const maxVerts = 16000 // ограничение на uint16 индексы + запас
+	drawBatch := func() {
+		if len(verts) == 0 {
+			return
+		}
+		f.mask.DrawTriangles(verts, inds, f.white, nil)
+		verts = verts[:0]
+		inds = inds[:0]
+	}
+
+	for i := range cells {
+		c := &cells[i]
+		x0 := float32(c.rx0)
+		y0 := float32(c.ry0)
+		x1 := float32(c.rx0 + c.tw)
+		y1 := float32(c.ry0 + c.th)
+
+		a00 := clamp01(cornerAlpha(c.tx, c.ty))
+		a10 := clamp01(cornerAlpha(c.tx+1, c.ty))
+		a01 := clamp01(cornerAlpha(c.tx, c.ty+1))
+		a11 := clamp01(cornerAlpha(c.tx+1, c.ty+1))
+
+		base := uint16(len(verts))
+		verts = append(verts,
+			ebiten.Vertex{DstX: x0, DstY: y0, SrcX: 0, SrcY: 0, ColorR: 1, ColorG: 1, ColorB: 1, ColorA: a00},
+			ebiten.Vertex{DstX: x1, DstY: y0, SrcX: 0, SrcY: 0, ColorR: 1, ColorG: 1, ColorB: 1, ColorA: a10},
+			ebiten.Vertex{DstX: x0, DstY: y1, SrcX: 0, SrcY: 0, ColorR: 1, ColorG: 1, ColorB: 1, ColorA: a01},
+			ebiten.Vertex{DstX: x1, DstY: y1, SrcX: 0, SrcY: 0, ColorR: 1, ColorG: 1, ColorB: 1, ColorA: a11},
+		)
+		inds = append(inds, base, base+1, base+2, base+1, base+3, base+2)
+
+		if len(verts)+4 >= maxVerts {
+			drawBatch()
+		}
+	}
+	drawBatch()
+}
+
+func (f *Fog) blurComposite(dst *ebiten.Image, ww, wh int) {
 	if f.blurSh == nil || f.compositeSh == nil || f.scratch == nil || f.blurred == nil || f.mask == nil {
 		return
 	}
@@ -115,21 +184,25 @@ func (f *Fog) blurComposite(dst *ebiten.Image, cells []voidCell, ww, wh int) {
 	}
 	f.blurred.DrawRectShader(ww, wh, f.blurSh, bop)
 
-	f.mask.Clear()
-	for i := range cells {
-		c := &cells[i]
-		a := uint8(math.Round(float64(c.edgeFade) * 255))
-		if a == 0 {
-			continue
-		}
-		vector.DrawFilledRect(f.mask, float32(c.rx0), float32(c.ry0), float32(c.tw), float32(c.th),
-			color.RGBA{R: 0xff, G: 0xff, B: 0xff, A: a}, false)
-	}
-
 	cop := &ebiten.DrawRectShaderOptions{
 		Images: [4]*ebiten.Image{f.scratch, f.blurred, f.mask},
 	}
 	dst.DrawRectShader(ww, wh, f.compositeSh, cop)
+}
+
+func (f *Fog) drawFogFullscreen(dst *ebiten.Image, ww, wh int, t, camX, camY float32) {
+	if f.sh == nil || f.mask == nil {
+		return
+	}
+	op := &ebiten.DrawRectShaderOptions{
+		Uniforms: map[string]any{
+			"Time": t,
+			"CamX": camX,
+			"CamY": camY,
+		},
+		Images: [4]*ebiten.Image{f.mask},
+	}
+	dst.DrawRectShader(ww, wh, f.sh, op)
 }
 
 type tileXY struct{ x, y int }
@@ -159,6 +232,16 @@ func abs(x int) int {
 		return -x
 	}
 	return x
+}
+
+func clamp01(v float32) float32 {
+	if v < 0 {
+		return 0
+	}
+	if v > 1 {
+		return 1
+	}
+	return v
 }
 
 // fadeFromBorderDist плавное нарастание тумана от границы с землёй (d — расстояние в клетках, d≥1 у пустых у кромки).
@@ -241,33 +324,30 @@ func (f *Fog) Draw(dst *ebiten.Image, tiles []gamekit.Tile, camX, camY float32, 
 			if tw <= 0 || th <= 0 {
 				continue
 			}
-			f.voidBuf = append(f.voidBuf, voidCell{rx0: rx0, ry0: ry0, tw: tw, th: th, edgeFade: edgeFade})
+			f.voidBuf = append(f.voidBuf, voidCell{
+				rx0: rx0, ry0: ry0, tw: tw, th: th,
+				tx: tx, ty: ty, edgeFade: edgeFade,
+			})
 		}
 	}
 
-	if wantBlur && len(f.voidBuf) > 0 {
+	if len(f.voidBuf) == 0 {
+		return
+	}
+
+	if wantBlur || wantFog {
 		f.ensureBuffers(dst)
-		f.blurComposite(dst, f.voidBuf, ww, wh)
+		f.buildMask(f.voidBuf)
+	}
+
+	if wantBlur {
+		f.blurComposite(dst, ww, wh)
 	}
 
 	if !wantFog {
 		return
 	}
-	for i := range f.voidBuf {
-		c := &f.voidBuf[i]
-		var gm ebiten.GeoM
-		gm.Translate(float64(c.rx0), float64(c.ry0))
-		op := &ebiten.DrawRectShaderOptions{
-			GeoM: gm,
-			Uniforms: map[string]any{
-				"Time":     t,
-				"EdgeFade": c.edgeFade,
-				"CamX":     camX,
-				"CamY":     camY,
-			},
-		}
-		dst.DrawRectShader(c.tw, c.th, f.sh, op)
-	}
+	f.drawFogFullscreen(dst, ww, wh, t, camX, camY)
 }
 
 func visibleTileRange(ww, wh int, camX, camY float32) (minTX, minTY, maxTX, maxTY int) {
