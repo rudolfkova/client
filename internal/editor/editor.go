@@ -18,10 +18,10 @@ import (
 	"github.com/hajimehoshi/ebiten/v2/vector"
 	"github.com/rudolfkova/grpc_auth/pkg/gamekit"
 
+	"client/data"
 	"client/internal/app/gamecmd"
 	"client/internal/app/gamemsg"
 	"client/internal/core/worldstate"
-	"client/data"
 	"client/internal/gamecontent"
 	"client/internal/infra/wswriter"
 	"client/internal/tiles"
@@ -48,11 +48,11 @@ const (
 // App — клиент редактора мира: spawn_tile по клику, превью состояния с game WS.
 // Тайлы приходят через тот же state.World, что и в игре: полный tiles / дельта tile_updates (см. changelog-client).
 type App struct {
-	wsGame *websocket.Conn
-	msgs   <-chan gamekit.Envelope
+	wsGame    *websocket.Conn
+	msgs      <-chan gamekit.Envelope
 	msgRouter *gamemsg.Router
 	cmdSvc    *gamecmd.Service
-	World  *worldstate.World
+	World     *worldstate.World
 
 	setNames []string
 	setIdx   int
@@ -202,11 +202,12 @@ func (a *App) sendSpawnCatalog(tx, ty int, instanceArgs json.RawMessage) {
 	if id == "" || id == "wall" {
 		return
 	}
+	wireTex, inst := gamecontent.CatalogSpawnWireAndInstanceArgs(id, instanceArgs)
 	intent := gamekit.TileSpawnIntent{
-		X: tx, Y: ty, Layer: catalogItemLayer, Rotation: 0, Texture: id, Blocks: false,
+		X: tx, Y: ty, Layer: catalogItemLayer, Rotation: 0, Texture: wireTex, Blocks: false,
 	}
-	if len(instanceArgs) > 0 {
-		intent.InstanceArgs = instanceArgs
+	if len(inst) > 0 {
+		intent.InstanceArgs = inst
 	}
 	if err := a.cmdSvc.SpawnTile(intent); err != nil {
 		log.Printf("editor spawn_tile: %v", err)
@@ -384,9 +385,9 @@ func (a *App) drawEditorTileChrome(screen *ebiten.Image, tileList []gamekit.Tile
 	for _, t := range tileList {
 		x0 := (gp + float32(t.X)*ts0 - a.camX) * z
 		y0 := (gp + float32(t.Y)*ts0 - a.camY) * z
-		tex := strings.TrimSpace(t.Texture)
+		catID := a.tileCatalogInteractID(t)
 
-		if _, isItem := a.catalogInteractSet[tex]; isItem {
+		if _, isItem := a.catalogInteractSet[catID]; isItem {
 			inset := float32(3.5) * z
 			if inset < 1.2 {
 				inset = 1.2
@@ -420,8 +421,8 @@ func (a *App) drawEditorTileChrome(screen *ebiten.Image, tileList []gamekit.Tile
 		opts.ColorScale.ScaleWithColor(color.RGBA{0xf6, 0xf7, 0xfb, 0xee})
 		textv2.Draw(screen, lab, face, opts)
 
-		if _, isItem := a.catalogInteractSet[tex]; isItem {
-			name := gamecontent.ItemDisplayName(data.ContentCatalogJSON, tex)
+		if _, isItem := a.catalogInteractSet[catID]; isItem {
+			name := gamecontent.ItemDisplayName(data.ContentCatalogJSON, catID)
 			if utf8.RuneCountInString(name) > 14 {
 				name = string([]rune(name)[:11]) + "…"
 			}
@@ -545,6 +546,34 @@ func (a *App) texture() string {
 	}
 	a.clampTileIdx()
 	return tiles.TextureKey(a.currentSet(), a.tileIdx)
+}
+
+// catalogPreviewWireTexture — ключ PNG для превью и призрака; door_trigger без отдельного спрайта (invisible).
+func (a *App) catalogPreviewWireTexture() string {
+	if a.pickCatalog && a.texture() == "door_trigger" {
+		return gamekit.InvisibleTileTextureKey
+	}
+	return a.texture()
+}
+
+func tileItemDefIDFromInstanceArgs(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var p struct {
+		ItemDefID string `json:"item_def_id"`
+	}
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(p.ItemDefID)
+}
+
+func (a *App) tileCatalogInteractID(t gamekit.Tile) string {
+	if id := tileItemDefIDFromInstanceArgs(t.InstanceArgs); id != "" {
+		return id
+	}
+	return strings.TrimSpace(t.Texture)
 }
 
 func (a *App) drainWebSocket() error {
@@ -911,7 +940,7 @@ func (a *App) Draw(screen *ebiten.Image) {
 						}
 					}
 				} else {
-					tiles.DrawGhost(screen, tx, ty, a.texture(), a.editRotation, a.blocks, camOpts, ga)
+					tiles.DrawGhost(screen, tx, ty, a.catalogPreviewWireTexture(), a.editRotation, a.blocks, camOpts, ga)
 				}
 			}
 		}

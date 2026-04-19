@@ -5,39 +5,40 @@ import (
 	"image/color"
 	"math"
 
+	"client/internal/tiles"
+	"client/internal/ui"
+	"client/internal/world"
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
 	textv2 "github.com/hajimehoshi/ebiten/v2/text/v2"
 	"github.com/hajimehoshi/ebiten/v2/vector"
-	"client/internal/tiles"
-	"client/internal/ui"
-	"client/internal/world"
+	"github.com/rudolfkova/grpc_auth/pkg/gamekit"
 )
 
 const (
-	paletteMinW     = 280
-	paletteMinMapW  = 420 // минимум ширины области карты слева от палитры
-	paletteSplitterW = 6  // зона захвата левого края палитры
+	paletteMinW      = 280
+	paletteMinMapW   = 420 // минимум ширины области карты слева от палитры
+	paletteSplitterW = 6   // зона захвата левого края палитры
 
-	pad          = 8
-	previewSize  = 64
-	lineH        = 14
-	blocksH      = 20
-	tabH         = 22
-	setRowH      = 22
-	metaRowH     = 22 // слой и поворот
-	thumbSize    = 36
-	thumbGap     = 4
-	rowH         = 44 // одиночные тайлы, одна колонка
+	pad         = 8
+	previewSize = 64
+	lineH       = 14
+	blocksH     = 20
+	tabH        = 22
+	setRowH     = 22
+	metaRowH    = 22 // слой и поворот
+	thumbSize   = 36
+	thumbGap    = 4
+	rowH        = 44 // одиночные тайлы, одна колонка
 )
 
-func paletteYLayerRow() int  { return pad + previewSize + 4 }
-func paletteYRotRow() int    { return paletteYLayerRow() + metaRowH + 4 }
-func paletteYKey() int       { return paletteYRotRow() + metaRowH + 4 }
-func paletteYBlocks() int    { return paletteYKey() + lineH + 4 }
-func paletteYTabs() int      { return paletteYBlocks() + blocksH + 4 }
-func paletteYSetRow() int    { return paletteYTabs() + tabH + 4 }
-func paletteGridTop() int    { return paletteYSetRow() + setRowH + 6 }
+func paletteYLayerRow() int { return pad + previewSize + 4 }
+func paletteYRotRow() int   { return paletteYLayerRow() + metaRowH + 4 }
+func paletteYKey() int      { return paletteYRotRow() + metaRowH + 4 }
+func paletteYBlocks() int   { return paletteYKey() + lineH + 4 }
+func paletteYTabs() int     { return paletteYBlocks() + blocksH + 4 }
+func paletteYSetRow() int   { return paletteYTabs() + tabH + 4 }
+func paletteGridTop() int   { return paletteYSetRow() + setRowH + 6 }
 
 func (a *App) paletteX() int {
 	pw := a.paletteWidth
@@ -376,7 +377,7 @@ func (a *App) drawPalette(dst *ebiten.Image) {
 	small := &textv2.GoTextFace{Source: ui.FontSource(), Size: 11}
 
 	tex := a.texture()
-	prevImg := tiles.ImageForTexture(tex)
+	prevImg := tiles.ImageForTexture(a.catalogPreviewWireTexture())
 	pvx := px + float32(a.paletteWidth/2-previewSize/2)
 	pvy := float32(pad)
 	pcx := pvx + float32(previewSize)/2
@@ -557,7 +558,11 @@ func (a *App) drawPalette(dst *ebiten.Image) {
 			cx := px + float32(pad)
 			tsz := float32(thumbSize)
 			vector.DrawFilledRect(dst, cx, cy+4, tsz, tsz, color.RGBA{0x2a, 0x32, 0x40, 0xff}, false)
-			img := tiles.ImageForTexture(id)
+			wire := id
+			if id == "door_trigger" {
+				wire = gamekit.InvisibleTileTextureKey
+			}
+			img := tiles.ImageForTexture(wire)
 			if img != nil {
 				w, h0 := img.Bounds().Dx(), img.Bounds().Dy()
 				op := &ebiten.DrawImageOptions{}

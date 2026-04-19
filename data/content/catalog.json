@@ -6,20 +6,30 @@
       "name": "Gem (pickable)",
       "pickable": true
     },
-    "tent_folded": {
-      "id": "tent_folded",
-      "name": "Folded Tent",
-      "pickable": true,
-      "interact": {
-        "script": "tent_unfold_2x2.json"
-      }
+    "key": {
+      "id": "key",
+      "name": "Key",
+      "pickable": true
     },
-    "tent_anchor": {
-      "id": "tent_anchor",
-      "name": "Tent (anchor)",
+    "door_trigger": {
+      "id": "door_trigger",
+      "name": "Door trigger",
       "pickable": false,
       "interact": {
-        "script": "tent_fold_2x2.json"
+        "script": "door_unlock.json",
+        "args": {
+          "key_item_def_id": "key",
+          "texture_closed": "door_close",
+          "texture_open": "door_open",
+          "collision_layer": 2
+        },
+        "editor_instance_args_example": {
+          "item_def_id": "door_trigger",
+          "key_item_def_id": "key",
+          "texture_closed": "door_close",
+          "texture_open": "door_open",
+          "collision_layer": 2
+        }
       }
     },
     "lever_sample": {
@@ -36,13 +46,37 @@
           "rotation": 0,
           "texture": "grass",
           "blocks": false
-        },
-        "editor_instance_args_example": {
-          "x": 4,
-          "y": 4,
-          "layer": 0,
-          "texture": "grass",
-          "blocks": false
+        }
+      }
+    },
+    "tent_folded": {
+      "id": "tent_folded",
+      "name": "Tent (folded)",
+      "pickable": true,
+      "interact": {
+        "script": "tent_unfold_2x2.json",
+        "args": {
+          "layer": 3,
+          "anchor_item_def_id": "tent_anchor",
+          "folded_item_def_id": "tent_folded",
+          "anchor_texture": "tent_3",
+          "top_left_texture": "tent_1",
+          "top_right_texture": "tent_2",
+          "bottom_left_texture": "tent_3",
+          "bottom_right_texture": "tent_4"
+        }
+      }
+    },
+    "tent_anchor": {
+      "id": "tent_anchor",
+      "name": "Tent anchor",
+      "pickable": false,
+      "interact": {
+        "script": "tent_fold_2x2.json",
+        "args": {
+          "layer": 3,
+          "folded_item_def_id": "tent_folded",
+          "folded_texture": "tent_folded"
         }
       }
     }

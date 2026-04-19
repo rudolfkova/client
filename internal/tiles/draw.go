@@ -120,6 +120,10 @@ func drawCamZoom(z float32) float32 {
 	return z
 }
 
+func isInvisibleWireTexture(tex string) bool {
+	return strings.TrimSpace(tex) == gamekit.InvisibleTileTextureKey
+}
+
 // Draw рисует один тайл: текстура из assets либо сплошная заливка-заглушка.
 func Draw(screen *ebiten.Image, t gamekit.Tile, opts DrawOpts) {
 	z := drawCamZoom(opts.CamZoom)
@@ -130,6 +134,9 @@ func Draw(screen *ebiten.Image, t gamekit.Tile, opts DrawOpts) {
 	tex := t.Texture
 	if opts.ResolveTexture != nil {
 		tex = opts.ResolveTexture(tex)
+	}
+	if isInvisibleWireTexture(tex) {
+		return
 	}
 	img := imageForTexture(tex, opts.AnimSeconds)
 	if img != nil {
@@ -158,6 +165,9 @@ func DrawGhost(screen *ebiten.Image, tx, ty int, texture string, rotationQuarter
 	tex := texture
 	if opts.ResolveTexture != nil {
 		tex = opts.ResolveTexture(tex)
+	}
+	if isInvisibleWireTexture(tex) {
+		return
 	}
 	img := imageForTexture(tex, opts.AnimSeconds)
 	if img != nil {
