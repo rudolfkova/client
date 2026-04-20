@@ -167,8 +167,8 @@ func (g *Game) onInventorySlotClick(slot string) {
 	}
 	from, to := g.invPickSlot, slot
 	invCopy := pl.Inventory
-	if !gamekit.TrySwapInventorySlots(&invCopy, from, to, func(id string) bool {
-		return gamecontent.ItemCanPlaceInBackpack(data.ContentCatalogJSON, id)
+	if !gamekit.TrySwapInventorySlots(&invCopy, from, to, func(slot, id string) bool {
+		return gamecontent.ItemCanPlaceInInventorySlot(data.ContentCatalogJSON, slot, id)
 	}) {
 		g.invPickSlot = ""
 		return

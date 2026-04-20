@@ -4,12 +4,14 @@
     "floor_gem": {
       "id": "floor_gem",
       "name": "Gem (pickable)",
-      "pickable": true
+      "pickable": true,
+      "allow_hand": true
     },
     "key": {
       "id": "key",
       "name": "Key",
-      "pickable": true
+      "pickable": true,
+      "allow_hand": true
     },
     "door_trigger": {
       "id": "door_trigger",
@@ -53,6 +55,7 @@
       "id": "tent_folded",
       "name": "Tent (folded)",
       "pickable": true,
+      "allow_hand": true,
       "interact": {
         "script": "tent_unfold_2x2.json",
         "args": {
@@ -79,6 +82,29 @@
           "folded_texture": "tent_folded"
         }
       }
+    },
+    "axe": {
+      "id": "axe",
+      "name": "Axe",
+      "pickable": true,
+      "allow_hand": true
+    },
+    "flint": {
+      "id": "flint",
+      "name": "Flint",
+      "pickable": true,
+      "allow_hand": true
+    },
+    "log": {
+      "id": "log",
+      "name": "Log",
+      "pickable": true,
+      "allow_hand": true
+    },
+    "campfire": {
+      "id": "campfire",
+      "name": "Campfire",
+      "pickable": true
     }
   }
 }

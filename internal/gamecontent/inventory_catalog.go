@@ -4,12 +4,13 @@ import (
 	"encoding/json"
 	"strings"
 
+	"github.com/rudolfkova/grpc_auth/pkg/gamekit"
 	"github.com/rudolfkova/grpc_auth/pkg/gamekit/content"
 )
 
-// ItemCanPlaceInBackpack — false, если в каталоге у id задано is_storage (в рюкзак нельзя).
-// Нет id в каталоге или ошибка разбора — true (как dev без каталога на сервере).
-func ItemCanPlaceInBackpack(jsonRaw []byte, itemDefID string) bool {
+// ItemCanPlaceInInventorySlot reports whether itemDefID may go into slot per embedded catalog.
+// Empty itemDefID: true. JSON parse error or empty items map: true (permissive, mirrors server without catalog).
+func ItemCanPlaceInInventorySlot(jsonRaw []byte, slot, itemDefID string) bool {
 	itemDefID = strings.TrimSpace(itemDefID)
 	if itemDefID == "" {
 		return true
@@ -18,9 +19,13 @@ func ItemCanPlaceInBackpack(jsonRaw []byte, itemDefID string) bool {
 	if err := json.Unmarshal(jsonRaw, &c); err != nil {
 		return true
 	}
-	def, ok := c.Items[itemDefID]
-	if !ok {
+	if len(c.Items) == 0 {
 		return true
 	}
-	return !def.IsStorage
+	return content.ItemFitsInventorySlot(&c, itemDefID, slot)
+}
+
+// ItemCanPlaceInBackpack — false, если в каталоге у id задано is_storage (в рюкзак нельзя).
+func ItemCanPlaceInBackpack(jsonRaw []byte, itemDefID string) bool {
+	return ItemCanPlaceInInventorySlot(jsonRaw, gamekit.InvSlotBackpackPref+"0", itemDefID)
 }
