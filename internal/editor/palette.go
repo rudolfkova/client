@@ -5,6 +5,7 @@ import (
 	"image/color"
 	"math"
 
+	"client/internal/gamecontent"
 	"client/internal/tiles"
 	"client/internal/ui"
 	"client/internal/world"
@@ -559,7 +560,7 @@ func (a *App) drawPalette(dst *ebiten.Image) {
 			tsz := float32(thumbSize)
 			vector.DrawFilledRect(dst, cx, cy+4, tsz, tsz, color.RGBA{0x2a, 0x32, 0x40, 0xff}, false)
 			wire := id
-			if id == "door_trigger" {
+			if gamecontent.IsInvisibleTriggerCatalogID(id) {
 				wire = gamekit.InvisibleTileTextureKey
 			}
 			img := tiles.ImageForTexture(wire)

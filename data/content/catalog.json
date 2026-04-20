@@ -105,6 +105,24 @@
       "id": "campfire",
       "name": "Campfire",
       "pickable": true
+    },
+    "tree_trigger": {
+      "id": "tree_trigger",
+      "name": "Tree harvest",
+      "pickable": false,
+      "interact": {
+        "script": "wood_harvest.json",
+        "args": {
+          "required_slot": "hand_main",
+          "required_item_def_id": "axe",
+          "reward_item_def_id": "log",
+          "ability": "str",
+          "dc": 14
+        },
+        "editor_instance_args_example": {
+          "item_def_id": "tree_trigger"
+        }
+      }
     }
   }
 }

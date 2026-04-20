@@ -2,16 +2,30 @@ package gamecontent
 
 import (
 	"encoding/json"
+	"strings"
 
 	"github.com/rudolfkova/grpc_auth/pkg/gamekit"
 )
 
-const doorTriggerCatalogID = "door_trigger"
+const (
+	doorTriggerCatalogID = "door_trigger"
+	treeTriggerCatalogID = "tree_trigger"
+)
 
-// CatalogSpawnWireAndInstanceArgs: для door_trigger на wire уходит текстура invisible, в instance_args — item_def_id каталога (если ещё не задан).
+// IsInvisibleTriggerCatalogID reports catalog items that use invisible.png on the wire and carry item_def_id in instance_args.
+func IsInvisibleTriggerCatalogID(id string) bool {
+	switch strings.TrimSpace(id) {
+	case doorTriggerCatalogID, treeTriggerCatalogID:
+		return true
+	default:
+		return false
+	}
+}
+
+// CatalogSpawnWireAndInstanceArgs: для невидимых триггеров на wire уходит текстура invisible, в instance_args — item_def_id каталога (если ещё не задан).
 func CatalogSpawnWireAndInstanceArgs(catalogItemID string, instanceArgs json.RawMessage) (wireTex string, merged json.RawMessage) {
 	wireTex = catalogItemID
-	if catalogItemID != doorTriggerCatalogID {
+	if !IsInvisibleTriggerCatalogID(catalogItemID) {
 		return wireTex, instanceArgs
 	}
 	wireTex = gamekit.InvisibleTileTextureKey
@@ -23,7 +37,7 @@ func CatalogSpawnWireAndInstanceArgs(catalogItemID string, instanceArgs json.Raw
 		m = map[string]any{}
 	}
 	if _, ok := m["item_def_id"]; !ok {
-		m["item_def_id"] = doorTriggerCatalogID
+		m["item_def_id"] = strings.TrimSpace(catalogItemID)
 	}
 	b, err := json.Marshal(m)
 	if err != nil {

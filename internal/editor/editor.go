@@ -548,9 +548,9 @@ func (a *App) texture() string {
 	return tiles.TextureKey(a.currentSet(), a.tileIdx)
 }
 
-// catalogPreviewWireTexture — ключ PNG для превью и призрака; door_trigger без отдельного спрайта (invisible).
+// catalogPreviewWireTexture — ключ PNG для превью и призрака; невидимые триггеры без отдельного спрайта (invisible).
 func (a *App) catalogPreviewWireTexture() string {
-	if a.pickCatalog && a.texture() == "door_trigger" {
+	if a.pickCatalog && gamecontent.IsInvisibleTriggerCatalogID(a.texture()) {
 		return gamekit.InvisibleTileTextureKey
 	}
 	return a.texture()

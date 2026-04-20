@@ -655,8 +655,6 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	g.drawPerfHud(screen)
 }
 
-func abMod(v int) int { return (v - 10) / 2 }
-
 func fogModeTag(m mapfog.RenderMode) string {
 	switch m {
 	case mapfog.RenderBlurAndFog:
@@ -737,7 +735,7 @@ func (g *Game) drawStatsPanel(screen *ebiten.Image) {
 			{"Харизма", s.Charisma},
 		}
 		for _, row := range rows {
-			m := abMod(row.val)
+			m := gamekit.AbilityModifier(row.val)
 			line := fmt.Sprintf("%-14s  %2d  (%+d)", row.label, row.val, m)
 			ro := &textv2.DrawOptions{}
 			ro.GeoM.Translate(float64(px+10), float64(ty))
