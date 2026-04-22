@@ -16,9 +16,8 @@
 #   make character-web-vps TOKEN=секрет
 #   make character-web LISTEN=127.0.0.1:9999
 #
-# Сборка бинаря Linux для копирования на сервер: make build-character-web-linux
-#   На VPS: рядом с client должен лежать репо grpc_auth (см. go.mod replace => ../grpc_auth/pkg/gamekit).
-#   GOWORK=off — не подхватывать go.work с чужой машины (см. character-web цель).
+# Сборка бинаря Linux: make build-character-web-linux. gamekit — с GitHub, ветка game (см. go.mod).
+# GOWORK=off: не подхватывать go.work с другой машины.
 
 .PHONY: character-web character-web-vps build-character-web-linux windows
 
