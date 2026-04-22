@@ -1,0 +1,26 @@
+# HTTP редактор персонажей + gRPC в character-service.
+# См. env CHARACTER_WEB_*, build из корня репо client: docker build -f Dockerfile.character-web -t character-web .
+FROM golang:1.24-alpine AS builder
+RUN apk add --no-cache git
+WORKDIR /src
+ENV CGO_ENABLED=0
+# go.work (локальная разработка) в образе ломает сборку — в Docker только go.mod (gamekit с Git).
+ENV GOWORK=off
+# go.mod требует go 1.26+ — скачать тулчейн
+ENV GOTOOLCHAIN=auto
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN go build -trimpath -ldflags="-s -w" -o /out/character-web ./cmd/character-web
+
+FROM alpine:3.21
+RUN apk add --no-cache ca-certificates
+COPY --from=builder /out/character-web /usr/local/bin/character-web
+WORKDIR /app
+COPY data ./data
+EXPOSE 8765
+ENV CHARACTER_WEB_LISTEN=0.0.0.0:8765
+ENV CHARACTER_WEB_DATA=/app/data
+# С docker compose (сеть default): character-service. На хосте: host.docker.internal
+ENV CHARACTER_WEB_GRPC_HOST=127.0.0.1
+ENTRYPOINT ["/usr/local/bin/character-web"]

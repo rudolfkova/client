@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"client/internal/characterweb"
 )
@@ -35,6 +36,19 @@ func main() {
 
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 	flag.Parse()
+	// Docker / systemd: same flags, но удобнее задать через env (не парсятся из одной CMD-строки).
+	if v := strings.TrimSpace(os.Getenv("CHARACTER_WEB_LISTEN")); v != "" {
+		*listen = v
+	}
+	if v := strings.TrimSpace(os.Getenv("CHARACTER_WEB_GRPC_HOST")); v != "" {
+		*grpcHost = v
+	}
+	if v := strings.TrimSpace(os.Getenv("CHARACTER_WEB_DATA")); v != "" {
+		*dataDir = v
+	}
+	if t := os.Getenv("CHARACTER_WEB_SERVICE_TOKEN"); strings.TrimSpace(t) != "" {
+		*token = t
+	}
 
 	grpcAddr := net.JoinHostPort(*grpcHost, characterGRPCPort)
 

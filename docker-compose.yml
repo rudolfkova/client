@@ -1,0 +1,22 @@
+# Одиночный запуск web-редактора. Корень: репо client.
+#   docker compose -f docker-compose.yml up -d --build
+# gRPC: на хосте, где проброен character-service :50055 — extra_hosts: host.docker.internal
+#
+# Вместе со стеком grpc_auth: см. grpc_auth/docker-compose.yml (сервис character-web).
+
+services:
+  character-web:
+    build:
+      context: .
+      dockerfile: Dockerfile.character-web
+    image: dnd/character-web:latest
+    container_name: dnd-character-web
+    ports:
+      - "${CHARACTER_WEB_PORT:-8765}:8765"
+    environment:
+      CHARACTER_WEB_LISTEN: 0.0.0.0:8765
+      CHARACTER_WEB_DATA: /app/data
+      CHARACTER_WEB_GRPC_HOST: host.docker.internal
+      # CHARACTER_WEB_SERVICE_TOKEN:  # задай в .env рядом или в shell
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

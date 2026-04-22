@@ -1,0 +1,11 @@
+# Docker build context for client (character-web, etc.)
+go.work
+.git
+dist
+.cursor
+.vscode
+*.md
+Makefile
+# keep data/ for /assets/ in character-web
+**/.git
+**/dist
