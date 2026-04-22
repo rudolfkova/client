@@ -17,7 +17,8 @@
 #   make character-web LISTEN=127.0.0.1:9999
 #
 # Сборка бинаря Linux для копирования на сервер: make build-character-web-linux
-#   На VPS положи рядом ./data, открой порт 8765 (ufw), в браузере http://IP:8765/
+#   На VPS: рядом с client должен лежать репо grpc_auth (см. go.mod replace => ../grpc_auth/pkg/gamekit).
+#   GOWORK=off — не подхватывать go.work с чужой машины (см. character-web цель).
 
 .PHONY: character-web character-web-vps build-character-web-linux windows
 
@@ -35,7 +36,7 @@ TOKENARG := -token=$(TOKEN)
 endif
 
 character-web:
-	go run ./cmd/character-web -listen=$(LISTEN) -grpc-host=$(GRPC_HOST) -data=$(DATA) $(TOKENARG)
+	GOWORK=off go run ./cmd/character-web -listen=$(LISTEN) -grpc-host=$(GRPC_HOST) -data=$(DATA) $(TOKENARG)
 
 character-web-vps:
 	$(MAKE) character-web LISTEN=$(WEB_LISTEN_VPS) GRPC_HOST=$(GRPC_HOST)
@@ -44,7 +45,7 @@ character-web-vps:
 CHARACTER_WEB_BIN ?= dist/character-web/character-web
 build-character-web-linux:
 	@mkdir -p $(dir $(CHARACTER_WEB_BIN))
-	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o $(CHARACTER_WEB_BIN) ./cmd/character-web
+	GOWORK=off GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o $(CHARACTER_WEB_BIN) ./cmd/character-web
 	@echo "OK: $(CHARACTER_WEB_BIN)"
 	@echo "Сервер: положи рядом data/, запуск: $(CHARACTER_WEB_BIN) -listen=0.0.0.0:8765 -grpc-host=127.0.0.1 -data=./data $(TOKENARG)"
 
@@ -54,8 +55,8 @@ WINDOWS_DIR ?= dist/windows-client
 windows:
 	rm -rf $(WINDOWS_DIR)
 	mkdir -p $(WINDOWS_DIR)
-	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o $(WINDOWS_DIR)/game.exe ./cmd/game
-	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o $(WINDOWS_DIR)/editor.exe ./cmd/editor
+	GOWORK=off GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o $(WINDOWS_DIR)/game.exe ./cmd/game
+	GOWORK=off GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o $(WINDOWS_DIR)/editor.exe ./cmd/editor
 	cp -r data $(WINDOWS_DIR)/
 	cp packaging/windows-client/README.txt $(WINDOWS_DIR)/README.txt
 	cp packaging/windows-client/run-game.bat $(WINDOWS_DIR)/

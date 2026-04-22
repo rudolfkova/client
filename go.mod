@@ -10,7 +10,7 @@ require (
 	google.golang.org/protobuf v1.36.11
 )
 
-replace github.com/rudolfkova/grpc_auth/pkg/gamekit => /home/grach/dnd/grpc_auth/pkg/gamekit
+replace github.com/rudolfkova/grpc_auth/pkg/gamekit => ../grpc_auth/pkg/gamekit
 
 require (
 	github.com/ebitengine/gomobile v0.0.0-20250923094054-ea854a63cce1 // indirect
