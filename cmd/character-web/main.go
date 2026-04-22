@@ -2,7 +2,9 @@
 //
 // Запуск из корня репозитория client:
 //
-//	go run ./cmd/character-web -grpc 127.0.0.1:50055 -token "$CHARACTER_WEB_SERVICE_TOKEN"
+//	go run ./cmd/character-web -grpc-host 127.0.0.1 -token "$CHARACTER_WEB_SERVICE_TOKEN"
+//
+// gRPC character-service: порт всегда 50055, хост задаётся -grpc-host.
 //
 // Открыть http://127.0.0.1:8765/ — ввести user_id, токен задаётся флагом (не храните в публичном репо).
 package main
@@ -12,6 +14,7 @@ import (
 	"flag"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -22,14 +25,18 @@ import (
 //go:embed all:web
 var webFS embed.FS
 
+const characterGRPCPort = "50055"
+
 func main() {
 	listen := flag.String("listen", "127.0.0.1:8765", "HTTP listen address")
-	grpcAddr := flag.String("grpc", "127.0.0.1:50055", "character-service gRPC host:port")
+	grpcHost := flag.String("grpc-host", "127.0.0.1", "character-service host (gRPC port fixed: "+characterGRPCPort+")")
 	token := flag.String("token", os.Getenv("CHARACTER_WEB_SERVICE_TOKEN"), "x-service-token (or env CHARACTER_WEB_SERVICE_TOKEN)")
 	dataDir := flag.String("data", "data", "optional: static files from this directory at /assets/")
 
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 	flag.Parse()
+
+	grpcAddr := net.JoinHostPort(*grpcHost, characterGRPCPort)
 
 	if *token == "" {
 		log.Println("warning: empty -token; set if character-service requires service_token")
@@ -42,7 +49,7 @@ func main() {
 		}
 	}
 
-	srv, err := characterweb.New(*grpcAddr, *token, absData)
+	srv, err := characterweb.New(grpcAddr, *token, absData)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -62,7 +69,7 @@ func main() {
 		log.Printf("serving %s at /assets/ (GET /api/anims — список из anim/)", absData)
 	}
 
-	log.Printf("character editor http://%s/  →  gRPC %s", *listen, *grpcAddr)
+	log.Printf("character editor http://%s/  →  gRPC %s", *listen, grpcAddr)
 	if err := http.ListenAndServe(*listen, mux); err != nil {
 		log.Fatal(err)
 	}

@@ -10,21 +10,43 @@
 #
 # Примеры:
 #   make character-web
-#   make character-web TOKEN=секрет GRPC=127.0.0.1:50055
+#   # Локально, gRPC на удалённом хосте:
+#   make character-web TOKEN=секрет GRPC_HOST=157.22.231.18
+#   # Само приложение + HTTP на 0.0.0.0, gRPC на той же машине (VPS, рядом с character-service):
+#   make character-web-vps TOKEN=секрет
 #   make character-web LISTEN=127.0.0.1:9999
+#
+# Сборка бинаря Linux для копирования на сервер: make build-character-web-linux
+#   На VPS положи рядом ./data, открой порт 8765 (ufw), в браузере http://IP:8765/
 
-.PHONY: character-web windows
+.PHONY: character-web character-web-vps build-character-web-linux windows
 
-LISTEN ?= 127.0.0.1:8765
-GRPC   ?= 127.0.0.1:50055
-DATA   ?= data
+LISTEN     ?= 127.0.0.1:8765
+# Хост character-service; порт gRPC 50055 зашит в cmd/character-web
+GRPC_HOST  ?= 127.0.0.1
+DATA       ?= data
+
+# Редактор в сети: тот же хост, что и docker-compose (character-service на 127.0.0.1:50055).
+WEB_LISTEN_VPS ?= 0.0.0.0:8765
+# Если character-service в другом контейнере/хосте — override: make character-web-vps GRPC_HOST=хост
 # TOKEN не обязателен в make: можно export CHARACTER_WEB_SERVICE_TOKEN=... перед запуском.
 ifneq ($(strip $(TOKEN)),)
 TOKENARG := -token=$(TOKEN)
 endif
 
 character-web:
-	go run ./cmd/character-web -listen=$(LISTEN) -grpc=$(GRPC) -data=$(DATA) $(TOKENARG)
+	go run ./cmd/character-web -listen=$(LISTEN) -grpc-host=$(GRPC_HOST) -data=$(DATA) $(TOKENARG)
+
+character-web-vps:
+	$(MAKE) character-web LISTEN=$(WEB_LISTEN_VPS) GRPC_HOST=$(GRPC_HOST)
+
+# Бинарь в dist/character-web/ — скопируй на сервер вместе с каталогом data/ (и при необходимости pkg path для go build на CI не нужен, билд с этой машины).
+CHARACTER_WEB_BIN ?= dist/character-web/character-web
+build-character-web-linux:
+	@mkdir -p $(dir $(CHARACTER_WEB_BIN))
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o $(CHARACTER_WEB_BIN) ./cmd/character-web
+	@echo "OK: $(CHARACTER_WEB_BIN)"
+	@echo "Сервер: положи рядом data/, запуск: $(CHARACTER_WEB_BIN) -listen=0.0.0.0:8765 -grpc-host=127.0.0.1 -data=./data $(TOKENARG)"
 
 # Кросс-сборка готовой папки для Windows (amd64): exe + data + README + bat.
 # Скопируйте $(WINDOWS_DIR) на ПК и запустите run-game.bat или game.exe из cmd.
