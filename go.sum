@@ -32,8 +32,8 @@ github.com/pierrec/lz4/v4 v4.1.22 h1:cKFw6uJDK+/gfw5BcDL0JL5aBsAFdsIT18eRtLj7VIU
 github.com/pierrec/lz4/v4 v4.1.22/go.mod h1:gZWDp/Ze/IJXGXf23ltt2EXimqmTUXEy0GFuRQyBid4=
 github.com/rivo/uniseg v0.4.7 h1:WUdvkW8uEhrYfLC4ZzdpI2ztxP1I582+49Oc5Mq64VQ=
 github.com/rivo/uniseg v0.4.7/go.mod h1:FN3SvrM+Zdj16jyLfmOkMNblXMcoc8DfTHruCPUcx88=
-github.com/rudolfkova/grpc_auth/pkg/gamekit v0.0.0-20260417225130-6e1887e30d39 h1:NiTOK3uEP7x+n50yfTFfceNbgnp+z8h3Jje38tFu0mU=
-github.com/rudolfkova/grpc_auth/pkg/gamekit v0.0.0-20260417225130-6e1887e30d39/go.mod h1:jsVqBjEHRq5VG45C7CLgyPXLQadD4UhspkqKa3xFINk=
+github.com/rudolfkova/gamekit v0.1.0 h1:0FAR5kmSqtrbVGZ0VhfFZJtGt1WPaRBxcoun9VdIFUc=
+github.com/rudolfkova/gamekit v0.1.0/go.mod h1:mSmJ/LRPVO9VxB/YXhGwyseBURkJaNTRpcM3jktZ4Uk=
 go.opentelemetry.io/auto/sdk v1.2.1 h1:jXsnJ4Lmnqd11kwkBV2LgLoFMZKizbCi5fNZ/ipaZ64=
 go.opentelemetry.io/auto/sdk v1.2.1/go.mod h1:KRTj+aOaElaLi+wW1kO/DZRXwkF4C5xPbEe3ZiIhN7Y=
 go.opentelemetry.io/otel v1.39.0 h1:8yPrr/S0ND9QEfTfdP9V+SiwT4E0G7Y5MO7p85nis48=
